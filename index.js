@@ -90,7 +90,7 @@
     
     });
     
-    await s4d.client.login('MTQyNDYzODQ0Mjc1ODg2OTAyNA.Ghj-X1.kweWSAeksN8MLBkFJGcAYII2GMWe3xqF5L0a90').catch((e) => {
+    await s4d.client.login('').catch((e) => {
             const tokenInvalid = true;
             const tokenError = e;
             if (e.toString().toLowerCase().includes("token")) {
