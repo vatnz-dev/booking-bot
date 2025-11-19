@@ -1,0 +1,58 @@
+{
+  "800244897960820737": [
+    {
+      "position": "NZCH_TWR",
+      "date": "21/10",
+      "start": 2000,
+      "end": 2100,
+      "messageId": "1429508569199542292",
+      "extendedSectors": []
+    },
+    {
+      "position": "NZAA_TWR",
+      "date": "22/10",
+      "start": 1800,
+      "end": 2100,
+      "messageId": "1429509247611174922",
+      "extendedSectors": []
+    },
+    {
+      "position": "NZAA_DEL",
+      "date": "21/10",
+      "start": 1800,
+      "end": 1900,
+      "messageId": "1429647728446668951",
+      "extendedSectors": []
+    },
+    {
+      "position": "NZAA_GND",
+      "date": "21/10",
+      "start": 1800,
+      "end": 1900,
+      "messageId": "1429647848575729685",
+      "extendedSectors": []
+    }
+  ],
+  "268277259570249739": [
+    {
+      "position": "NZCH-K_CTR",
+      "date": "09/11",
+      "start": 2000,
+      "end": 2100,
+      "messageId": "1436495234174550226",
+      "extendedSectors": [
+        "NZCH-S_CTR"
+      ]
+    }
+  ],
+  "295860185698664448": [
+    {
+      "position": "NZAA_TWR",
+      "date": "19/11",
+      "start": 1900,
+      "end": 2200,
+      "messageId": "1440277350632787968",
+      "extendedSectors": []
+    }
+  ]
+}
