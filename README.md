@@ -1,6 +1,6 @@
 # VATNZ ATC Booking Bot
 
-This repository contains the VATNZ ATC Booking Bot project. It is designed to streamline controller scheduling, mentoring workflows, and operational coordination across VATNZ. The bot integrates with Discord and provides a structured booking system for ATC sessions.
+This repository contains the VATNZ ATC Booking Bot and Website Project. It is designed to streamline controller scheduling, mentoring workflows, and operational coordination across VATNZ. The bot integrates with Discord and provides a structured booking system for ATC sessions.
 
 ---
 
