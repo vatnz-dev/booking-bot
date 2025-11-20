@@ -139,6 +139,8 @@
       }
     
         });
+        const axios = require('axios');
+
     // Convert DD/MM and HHMM to UTC string "YYYY-MM-DD HH:mm:ss"
 function convertToUTC(dateStr, timeStr) {
   const [day, month] = dateStr.split('/');
@@ -159,13 +161,24 @@ function convertToUTC(dateStr, timeStr) {
 // Get VATSIM ID from Discord ID
 async function getVatsimId(discordId) {
   try {
-    const response = await axios.get(`https://api.vatsim.net/v2/members/discord/${discordId}`);
+    const url = `https://api.vatsim.net/v2/members/discord/${discordId}`;
+    console.log(`🔍 Fetching VATSIM ID from: ${url}`);
+    const response = await axios.get(url);
+
+    console.log('✅ VATSIM API response:', response.data);
+
+    if (!response.data || !response.data.user_id) {
+      console.error('❌ VATSIM ID not found in response.');
+      return null;
+    }
+
     return response.data.user_id;
   } catch (error) {
-    console.error('Failed to fetch VATSIM ID:', error.response?.status);
+    console.error('❌ Failed to fetch VATSIM ID:', error.response?.status || error.message);
     return null;
   }
 }
+
 
 // Send booking to VATSIM API
 async function sendBooking({ callsign, cid, start, end }) {
@@ -671,7 +684,6 @@ async function sendBooking({ callsign, cid, start, end }) {
           }
         }
       }
-    const axios = require('axios');
 // --- Prepare UTC times ---
 const startUTC = convertToUTC(date, String(start).padStart(4, '0'));
 const endUTC = convertToUTC(date, String(end).padStart(4, '0'));
@@ -679,7 +691,7 @@ const endUTC = convertToUTC(date, String(end).padStart(4, '0'));
 // --- Get VATSIM ID ---
 const vatsimId = await getVatsimId(userId);
 if (!vatsimId) {
-  return i.reply({ content: '❌ Could not retrieve your VATSIM ID. Please ensure your Discord is linked.', ephemeral: true });
+  return i.reply({ content: '❌ Could not retrieve your VATSIM ID. Please ensure your Discord is linked Here: https://community.vatsim.net/', ephemeral: true });
 }
 
 // --- Send booking to VATSIM API ---
