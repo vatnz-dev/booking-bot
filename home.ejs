@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en" class="light">
+<head>
+  <meta charset="UTF-8">
+  <title>VATNZ Bookings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    .footer-bar {
+      height: 6px;
+      border-radius: 0 0 0.5rem 0.5rem;
+    }
+    .DEL { background-color: #1E3A8A; }
+    .GND { background-color: #059669; }
+    .TWR { background-color: #DC2626; }
+    .APP { background-color: #EA580C; }
+    .CTR { background-color: #0EA5E9; }
+    .FSS { background-color: #9333EA; }
+
+    .dot {
+      transition: transform 0.3s ease-in-out;
+    }
+    input:checked ~ .dot {
+      transform: translateX(6px);
+    }
+  </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-sans">
+  <main class="max-w-4xl mx-auto px-4 py-6">
+    <h1 class="text-3xl font-semibold mb-2">Bookings</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Times shown in selected time zone</p>
+
+    <!-- Dark Mode Switch -->
+    <div class="flex justify-end mb-4">
+      <label class="flex items-center cursor-pointer">
+        <div class="relative">
+          <input type="checkbox" id="dark-toggle" class="sr-only">
+          <div class="block bg-gray-300 dark:bg-gray-600 w-14 h-8 rounded-full"></div>
+          <div class="dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition"></div>
+        </div>
+        <div class="ml-3 text-sm text-gray-700 dark:text-gray-300">
+          <span id="mode-icon">🌞</span>
+        </div>
+      </label>
+    </div>
+
+    <!-- Controls -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+      <div class="flex items-center gap-2">
+        <button id="prev-day" class="px-2 py-1 bg-gray-200 dark:bg-gray-700 rounded">&larr;</button>
+        <span id="selected-date" class="text-sm font-medium">--/--</span>
+        <button id="next-day" class="px-2 py-1 bg-gray-200 dark:bg-gray-700 rounded">&rarr;</button>
+      </div>
+      <div class="flex items-center gap-2">
+        <label for="airport" class="text-sm">Airport:</label>
+        <select id="airport" class="border rounded px-2 py-1 text-sm">
+          <option value="">All</option>
+        </select>
+        <label for="timezone" class="text-sm">Time Zone:</label>
+        <select id="timezone" class="border rounded px-2 py-1 text-sm">
+          <option value="local">Local</option>
+          <option value="Pacific/Auckland">NZT</option>
+          <option value="UTC">UTC</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Search -->
+    <input type="text" id="search" placeholder="Search by airport or position..." class="w-full border rounded px-3 py-2 text-sm mb-4">
+
+    <!-- Summary -->
+    <div id="daily-summary" class="mb-4 text-sm text-gray-700 dark:text-gray-300"></div>
+
+    <!-- Bookings -->
+    <div id="booking-list" class="space-y-6"></div>
+
+    <!-- Booking Data -->
+    <script>
+      const bookingData = <%- JSON.stringify(bookings) %>;
+    </script>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/moment@2.29.4/moment.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/moment-timezone@0.5.43/builds/moment-timezone-with-data.min.js"></script>
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        const timezoneSelect = document.getElementById('timezone');
+        const airportSelect = document.getElementById('airport');
+        const bookingList = document.getElementById('booking-list');
+        const selectedDateDisplay = document.getElementById('selected-date');
+        const prevDayBtn = document.getElementById('prev-day');
+        const nextDayBtn = document.getElementById('next-day');
+        const searchInput = document.getElementById('search');
+        const summaryBox = document.getElementById('daily-summary');
+        const darkToggle = document.getElementById('dark-toggle');
+        const modeIcon = document.getElementById('mode-icon');
+
+        let selectedDate = moment.tz(moment.tz.guess()).startOf('day');
+
+        function getLocalLabel() {
+          const localZone = moment.tz.guess();
+          const abbrev = moment().tz(localZone).format('z');
+          return `Local (${abbrev})`;
+        }
+
+        function updateTimezoneLabel() {
+          const localOption = timezoneSelect.querySelector('option[value="local"]');
+          localOption.textContent = getLocalLabel();
+        }
+
+        function populateAirportDropdown() {
+          const airports = new Set();
+          bookingData.forEach(b => {
+            const code = b.position.split('_')[0];
+            airports.add(code);
+          });
+          [...airports].sort().forEach(code => {
+            const option = document.createElement('option');
+            option.value = code;
+            option.textContent = code;
+            airportSelect.appendChild(option);
+          });
+        }
+
+        function updateView() {
+          const tz = timezoneSelect.value === 'local' ? moment.tz.guess() : timezoneSelect.value;
+          const query = searchInput.value.toLowerCase();
+          const selectedAirport = airportSelect.value;
+          bookingList.innerHTML = '';
+          summaryBox.innerHTML = '';
+          selectedDateDisplay.textContent = selectedDate.format('DD/MM');
+
+          const filtered = [];
+
+          bookingData.forEach(b => {
+            const fullDate = `${b.date}/${new Date().getFullYear()}`;
+            const startFormatted = String(b.start).padStart(4, '0').replace(/(\d{2})(\d{2})/, '$1:$2');
+            const endFormatted = String(b.end).padStart(4, '0').replace(/(\d{2})(\d{2})/, '$1:$2');
+
+            const startTime = moment.tz(`${fullDate} ${startFormatted}`, 'DD/MM/YYYY HH:mm', 'Pacific/Auckland').tz(tz);
+            const endTime = moment.tz(`${fullDate} ${endFormatted}`, 'DD/MM/YYYY HH:mm', 'Pacific/Auckland').tz(tz);
+
+            if (!startTime.isSame(selectedDate, 'day')) return;
+            if (selectedAirport && !b.position.startsWith(selectedAirport)) return;
+            if (query && !b.position.toLowerCase().includes(query)) return;
+
+            filtered.push({ b, startTime, endTime });
+          });
+
+          summaryBox.textContent = `Total bookings: ${filtered.length}`;
+
+          filtered.forEach(({ b, startTime, endTime }) => {
+            const type = b.position.split('_')[1];
+            const extended = b.extendedSectors?.length > 0 ? `<p class="text-sm text-gray-700 dark:text-gray-300">Extended Sectors: ${b.extendedSectors.join(', ')}</p>` : '';
+            const eventTag = b.event ? `<div class="mt-2 text-xs font-bold text-red-600">EVENT: ${b.event}</div>` : '';
+
+            const block = document.createElement('div');
+            block.className = 'bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden';
+
+            block.innerHTML = `
+              <div class="p-4">
+                <div class="flex justify-between items-center">
+                  <div>
+                    <h3 class="text-lg font-medium">${b.position}</h3>
+                    <p class="text-sm text-gray-600 dark:text-gray-400">${startTime.format('HH:mm')} to ${endTime.format('HH:mm')} (${tz})</p>
+                    ${b.position.includes('_CTR') ? extended : ''}
+                  </div>
+                  <div class="text-sm text-gray-500 dark:text-gray-400">Controller ID: ${b.controller}</div>
+                </div>
+                ${eventTag}
+              </div>
+              <div class="footer-bar ${type}"></div>
+            `;
+
+            bookingList.appendChild(block);
+          });
+        }
+
+        timezoneSelect.addEventListener('change', () => {
+            selectedDate = moment.tz(
+    timezoneSelect.value === 'local' ? moment.tz.guess() : timezoneSelect.value
+  ).startOf('day');
+  updateView();
+});
+
+airportSelect.addEventListener('change', updateView);
+prevDayBtn.addEventListener('click', () => {
+  selectedDate.subtract(1, 'day');
+  updateView();
+});
+nextDayBtn.addEventListener('click', () => {
+  selectedDate.add(1, 'day');
+  updateView();
+});
+searchInput.addEventListener('input', updateView);
+
+darkToggle.addEventListener('change', () => {
+  const html = document.documentElement;
+  if (darkToggle.checked) {
+    html.classList.add('dark');
+    html.classList.remove('light');
+    modeIcon.textContent = '🌙';
+  } else {
+    html.classList.remove('dark');
+    html.classList.add('light');
+    modeIcon.textContent = '🌞';
+  }
+});
+
+updateView();
+});
+</script>
+</main>
+</body>
+</html>
