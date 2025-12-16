@@ -90,7 +90,7 @@
     
     });
     
-    await s4d.client.login('').catch((e) => {
+    await s4d.client.login('MTQyNDYzODQ0Mjc1ODg2OTAyNA.Ghj-X1.kweWSAeksN8MLBkFJGcAYII2GMWe3xqF5L0a90').catch((e) => {
             const tokenInvalid = true;
             const tokenError = e;
             if (e.toString().toLowerCase().includes("token")) {
@@ -139,45 +139,118 @@
       }
     
         });
-    
-    s4d.client.on('interactionCreate', async (interaction) => {
-      if (!interaction.isSelectMenu()) return;
-      if (interaction.customId !== 'delete_booking_select') return;
-    
-      const Database = require("easy-json-database");
-      const messages = new Database("./messages.json");
-    
-      const selectedIndex = parseInt(interaction.values[0]);
-      const userId = String(interaction.member.user.id);
-      const userBookings = messages.get(userId);
-    
-      if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
-        await interaction.update({
-          content: '❌ Booking not found.',
-          components: [],
-          ephemeral: true
-        });
-        return;
-      }
-    
-      const booking = userBookings[selectedIndex];
-      userBookings.splice(selectedIndex, 1);
-      messages.set(userId, userBookings);
-    
-      try {
-        const channel = interaction.channel;
-        const messageToDelete = await channel.messages.fetch(booking.messageId);
-        await messageToDelete.delete();
-      } catch (err) {
-        console.error(`⚠️ Could not delete message ${booking.messageId}:`, err);
-      }
-    
-      await interaction.update({
-        content: `✅ Booking for ${booking.position} on ${booking.date} at ${booking.start} has been deleted.`,
-        components: [],
-        ephemeral: true
-      });
+        const axios = require('axios');
+
+    // Convert DD/MM and HHMM to UTC string "YYYY-MM-DD HH:mm:ss"
+function convertToUTC(dateStr, timeStr) {
+  const [day, month] = dateStr.split('/');
+  const year = new Date().getFullYear();
+
+  // Parse time string like "1900" or "0210"
+  const hours = parseInt(timeStr.slice(0, 2), 10);
+  const minutes = parseInt(timeStr.slice(2), 10);
+
+  // Create NZ local time
+  const nzDate = new Date(Date.UTC(year, month - 1, day, hours, minutes));
+  // Adjust for NZDT offset (+13). Use +12 if NZST.
+  nzDate.setHours(nzDate.getHours() - 13);
+
+  return nzDate.toISOString().replace('T', ' ').slice(0, 19);
+}
+
+// Get VATSIM ID from Discord ID
+async function getVatsimId(discordId) {
+  try {
+    const url = `https://api.vatsim.net/v2/members/discord/${discordId}`;
+    console.log(`🔍 Fetching VATSIM ID from: ${url}`);
+    const response = await axios.get(url);
+
+    console.log('✅ VATSIM API response:', response.data);
+
+    if (!response.data || !response.data.user_id) {
+      console.error('❌ VATSIM ID not found in response.');
+      return null;
+    }
+
+    return response.data.user_id;
+  } catch (error) {
+    console.error('❌ Failed to fetch VATSIM ID:', error.response?.status || error.message);
+    return null;
+  }
+}
+
+
+// Send booking to VATSIM API
+async function sendBooking({ callsign, cid, start, end }) {
+  try {
+    const payload = {
+      callsign,
+      cid,
+      type: "booking",
+      start,
+      end,
+      division: "TBC",
+      subdivision: "TBC"
+    };
+    const response = await axios.post('https://atc-bookings.vatsim.net/api/booking', payload);
+    return response.data.id; // booking ID from VATSIM
+  } catch (error) {
+    console.error('Booking failed:', error.response?.data);
+    return null;
+  }
+}
+
+   s4d.client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isSelectMenu()) return;
+  if (interaction.customId !== 'delete_booking_select') return;
+
+  const Database = require("easy-json-database");
+  const messages = new Database("./messages.json");
+
+  const selectedIndex = parseInt(interaction.values[0]);
+  const userId = String(interaction.member.user.id);
+  const userBookings = messages.get(userId);
+
+  if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
+    await interaction.update({
+      content: '❌ Booking not found.',
+      components: [],
+      ephemeral: true
     });
+    return;
+  }
+
+  const booking = userBookings[selectedIndex];
+
+  // --- Delete booking from VATSIM API if bookingvatid exists ---
+  if (booking.bookingvatid) {
+    try {
+      await axios.delete(`https://atc-bookings.vatsim.net/api/booking/${booking.bookingvatid}`);
+      console.log(`✅ VATSIM booking ${booking.bookingvatid} deleted.`);
+    } catch (error) {
+      console.error(`⚠️ Failed to delete VATSIM booking ${booking.bookingvatid}:`, error.response?.status);
+    }
+  }
+
+  // --- Remove booking locally ---
+  userBookings.splice(selectedIndex, 1);
+  messages.set(userId, userBookings);
+
+  // --- Delete the Discord message if it exists ---
+  try {
+    const channel = interaction.channel;
+    const messageToDelete = await channel.messages.fetch(booking.messageId);
+    await messageToDelete.delete();
+  } catch (err) {
+    console.error(`⚠️ Could not delete message ${booking.messageId}:`, err);
+  }
+
+  await interaction.update({
+    content: `✅ Booking for ${booking.position} on ${booking.date} at ${booking.start} has been deleted.`,
+    components: [],
+    ephemeral: true
+  });
+  });
     
     
     s4d.client.on('ready', async () => {
@@ -611,7 +684,28 @@
           }
         }
       }
-    
+// --- Prepare UTC times ---
+const startUTC = convertToUTC(date, String(start).padStart(4, '0'));
+const endUTC = convertToUTC(date, String(end).padStart(4, '0'));
+
+// --- Get VATSIM ID ---
+const vatsimId = await getVatsimId(userId);
+if (!vatsimId) {
+  return i.reply({ content: '❌ Could not retrieve your VATSIM ID. Please ensure your Discord is linked Here: https://community.vatsim.net/', ephemeral: true });
+}
+
+// --- Send booking to VATSIM API ---
+const bookingvatid = await sendBooking({
+  callsign: pos,
+  cid: vatsimId,
+  start: startUTC,
+  end: endUTC
+});
+
+if (!bookingvatid) {
+  return i.reply({ content: '❌ Booking failed. Please try again later.', ephemeral: true });
+}
+
       const bookingEmbed = new MessageEmbed()
         .setColor('#000000')
         .setTitle(pos)
@@ -639,10 +733,18 @@
       const sentMessage = await channel.send({ embeds: [bookingEmbed] });
     
       const existing = messages.get(userId);
-      const userBookings = Array.isArray(existing) ? existing : (existing ? [existing] : []);
-      userBookings.push({ position: pos, date, start, end, messageId: sentMessage.id, extendedSectors });
-      messages.set(userId, userBookings);
-    
+const userBookings = Array.isArray(existing) ? existing : (existing ? [existing] : []);
+userBookings.push({
+  position: pos,
+  date,
+  start,
+  end,
+  messageId: sentMessage.id,
+  extendedSectors,
+  bookingvatid // <-- new field added here
+});
+messages.set(userId, userBookings);
+
       if (isCTR) {
         const allExtendable = [
           'NZCH-B_CTR', 'NZOH_CTR', 'NZCH-K_CTR',
