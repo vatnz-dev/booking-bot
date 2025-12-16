@@ -16,4 +16,4 @@ This repository contains the VATNZ ATC Booking Bot project. It is designed to st
 
 ## Tech Stack
 - Node.js – Backend runtime
-- Discord.js v13 – Discord bot framework
+- Discord.js v14 – Discord bot framework
