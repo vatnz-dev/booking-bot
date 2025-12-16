@@ -1,25 +1,24 @@
-(async()=>{
-    const events = require('events');
-    const { exec } = require("child_process")
-    const logs = require("discord-logs")
-    const Discord = require("discord.js")
-    const { 
-        MessageEmbed, 
-        MessageButton, 
-        MessageActionRow, 
-        Intents, 
-        Permissions, 
-        MessageSelectMenu 
-    }= require("discord.js")
-    const fs = require('fs');
-    let process = require('process');
+(async () => {
+  const events = require('events');
+  const { exec } = require("child_process");
+  const Discord = require("discord.js");
+const buttonCooldowns = new Map();
+  const {
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle,
+    EmbedBuilder,
+    ButtonBuilder,
+    ActionRowBuilder,
+    StringSelectMenuBuilder,
+    PermissionFlagsBits,
+    ActivityType,
+    ButtonStyle
+  } = require("discord.js");
+  const fs = require('fs');
     const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-    const os = require("os-utils");
-    let URL = require('url')
-    const ms = require("ms")
-    let https = require("https")
-    const synchronizeSlashCommands = require('@frostzzone/discord-sync-commands');
+  
+    const syncCommands = require('discord-sync-commands');
     const Database  = require("easy-json-database")
     
     let s4d = {
@@ -33,76 +32,44 @@
         message:null,
         notifer:null,
         checkMessageExists() {
-            if (!s4d.client) throw new Error('You cannot perform message operations without a Discord.js client')
-            if (!s4d.client.readyTimestamp) throw new Error('You cannot perform message operations while the bot is not connected to the Discord API')
+            if (!client) throw new Error('You cannot perform message operations without a Discord.js client')
+            if (!client.readyTimestamp) throw new Error('You cannot perform message operations while the bot is not connected to the Discord API')
         }
     };
 
-    if (!require('./package.json').dependencies['discord.js'].startsWith("^13.")) {
-      let file = JSON.parse(fs.readFileSync('package.json'))
-      file.dependencies['discord.js'] = '^13.16.0'
-      fs.writeFileSync('package.json', JSON.stringify(file, null, 4))
-      exec('npm i')
-      throw new Error("Seems you arent using v13 please re-run or run `npm i discord.js@13.16.0`");
-    }
 
-    if (!require('./package.json').dependencies['discord-logs'].startsWith("^2.")) {
-      let file = JSON.parse(fs.readFileSync('package.json'))
-      file.dependencies['discord-logs'] = '^2.0.0'
-      fs.writeFileSync('package.json', JSON.stringify(file, null, 4))
-      exec('npm i')
-      throw new Error("discord-logs must be 2.0.0. please re-run or if that fails run `npm i discord-logs@2.0.0` then re-run");
-    }
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
+require('dotenv').config();
 
-    s4d.client = new s4d.Discord.Client({
-        intents: [
-            Object.values(s4d.Discord.Intents.FLAGS).reduce((acc, p) => acc | p, 0)
-        ],
-        partials: [
-            "REACTION", 
-            "CHANNEL"
-        ]
-    });
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages
+  ],
+  partials: [Partials.Channel, Partials.Message]
+});
 
-    s4d.client.on('ready', () => {
-        console.log(s4d.client.user.tag + " is alive!")
-    })
+client.once('ready', () => {
+  console.log(`${client.user.tag} is alive!`);
+});
 
-    process.on('uncaughtException', function (err) {
-        console.log('Error!');
-        console.log(err);
-    });
+client.login(process.env.DISCORD_TOKEN);
 
-    logs(s4d.client);
-
-    const discordModals = require('discord-modals');
-    discordModals(s4d.client);
-    const { Modal, TextInputComponent, showModal } = require('discord-modals');
-
-    s4d.client.on('interactionCreate', async (interaction) => {
+    client.on('interactionCreate', async (interaction) => {
               if ((interaction.commandName) == 'edit') {
       }
     
         });
     
-    s4d.client.on('ready', async () => {
-      s4d.client.user.setPresence({status: "online",activities:[{name:'ATC Bookings',type:"WATCHING"}]});
+    client.on('clientReady', async () => {
+      client.user.setPresence({status: "online",activities:[{name:'ATC Bookings',type: ActivityType.Watching}]});
     
     });
+    require('dotenv').config();
     
-    await s4d.client.login('MTQyNDYzODQ0Mjc1ODg2OTAyNA.Ghj-X1.kweWSAeksN8MLBkFJGcAYII2GMWe3xqF5L0a90').catch((e) => {
-            const tokenInvalid = true;
-            const tokenError = e;
-            if (e.toString().toLowerCase().includes("token")) {
-                throw new Error("An invalid bot token was provided!")
-            } else {
-                throw new Error("Privileged Gateway Intents are not enabled! Please go to https://discord.com/developers and turn on all of them.")
-            }
-        });
-    
-    s4d.client.on('interactionCreate', async (interaction) => {
+    client.on('interactionCreate', async (interaction) => {
               if ((interaction.commandName) == 'deletebookings') {
-        const { MessageActionRow, MessageSelectMenu } = require('discord.js');
+        const { ActionRowBuilder, SelectMenuBuilder } = require('discord.js');
         const Database = require("easy-json-database");
         const messages = new Database("./messages.json");
     
@@ -123,8 +90,8 @@
           value: String(index)
         }));
     
-        const row = new MessageActionRow().addComponents(
-          new MessageSelectMenu()
+        const row = new ActionRowBuilder().addComponents(
+          new SelectMenuBuilder()
             .setCustomId('delete_booking_select')
             .setPlaceholder('Select a booking to delete')
             .addOptions(options)
@@ -162,10 +129,7 @@ function convertToUTC(dateStr, timeStr) {
 async function getVatsimId(discordId) {
   try {
     const url = `https://api.vatsim.net/v2/members/discord/${discordId}`;
-    console.log(`🔍 Fetching VATSIM ID from: ${url}`);
     const response = await axios.get(url);
-
-    console.log('✅ VATSIM API response:', response.data);
 
     if (!response.data || !response.data.user_id) {
       console.error('❌ VATSIM ID not found in response.');
@@ -179,7 +143,7 @@ async function getVatsimId(discordId) {
   }
 }
 
-
+/*
 // Send booking to VATSIM API
 async function sendBooking({ callsign, cid, start, end }) {
   try {
@@ -199,8 +163,8 @@ async function sendBooking({ callsign, cid, start, end }) {
     return null;
   }
 }
-
-   s4d.client.on('interactionCreate', async (interaction) => {
+*/
+   client.on('interactionCreate', async (interaction) => {
   if (!interaction.isSelectMenu()) return;
   if (interaction.customId !== 'delete_booking_select') return;
 
@@ -221,17 +185,16 @@ async function sendBooking({ callsign, cid, start, end }) {
   }
 
   const booking = userBookings[selectedIndex];
-
+/*
   // --- Delete booking from VATSIM API if bookingvatid exists ---
   if (booking.bookingvatid) {
     try {
       await axios.delete(`https://atc-bookings.vatsim.net/api/booking/${booking.bookingvatid}`);
-      console.log(`✅ VATSIM booking ${booking.bookingvatid} deleted.`);
     } catch (error) {
       console.error(`⚠️ Failed to delete VATSIM booking ${booking.bookingvatid}:`, error.response?.status);
     }
   }
-
+*/
   // --- Remove booking locally ---
   userBookings.splice(selectedIndex, 1);
   messages.set(userId, userBookings);
@@ -253,7 +216,7 @@ async function sendBooking({ callsign, cid, start, end }) {
   });
     
     
-    s4d.client.on('ready', async () => {
+    client.on('ready', async () => {
       event.set(String('NZZO-E_FSS'), '0/0');
       event.set(String('NZAA-R_CTR'), '0/0');
       event.set(String('NZCH-D_CTR'), '0/0');
@@ -267,231 +230,196 @@ async function sendBooking({ callsign, cid, start, end }) {
       event.set(String('NZQN_GND'), '0/0');
       event.set(String('NCRG_DEL'), '0/0');
       event.set(String('NZFX_DEL'), '0/0');
-      var plan_embed = new Discord.MessageEmbed();
+      var plan_embed = new Discord.EmbedBuilder();
          plan_embed.setColor('#000000');
         plan_embed.setTitle(String('Book A Controlling Session'))
-         plan_embed.setURL(String());
         plan_embed.setDescription(String('Controllers may post in this channel indicating that they intend to log onto a specific callsign at a specific time. This channel does not act as a booking system, but merely a heads-up that you intend to log on around that time.'));
-        plan_embed.addField(String('Under mentoring?'), String('You must run the /mentor command and put your Mentor/Instructor\'s first and last name in your post. If you are logging on and utilising your Solo Endorsement, you must also state this in your controller info.'), true);
-        plan_embed.addField(String('More Infomation?'), String('https://www.vatnz.net/vatnz/policies/atc-policy/'), false);
-    
-      let plan = new MessageButton()
-        plan.setCustomId('plan');plan.setStyle("SECONDARY");plan.setLabel('Book Controlling Session');s4d.client.channels.cache.get('1424637009686696040').send({
+        plan_embed.addFields(
+  {
+    name: 'Under mentoring?',
+    value: 'You must run the /mentor command and put your Mentor/Instructor\'s first and last name in your post. If you are logging on and utilising your Solo Endorsement, you must also state this in your controller info.',
+    inline: true
+  },
+  {
+    name: 'More Information?',
+    value: 'https://www.vatnz.net/vatnz/policies/atc-policy/',
+    inline: false
+  }
+);
+      let plan = new ButtonBuilder()
+        plan.setCustomId('plan');plan.setStyle(ButtonStyle.Secondary);plan.setLabel('Book Controlling Session');client.channels.cache.get('1449677599390568632').send({
               content: String(' '),
-              components: [new MessageActionRow().addComponents(plan)],
+              components: [new ActionRowBuilder().addComponents(plan)],
               embeds: [plan_embed]
               });
     });
     
-    s4d.client.on('interactionCreate', async (i) => {
-            let member = i.guild.members.cache.get(i.member.user.id)
-            let interaction = i; if (!(i.isButton())) return;
-              if (((i.customId)) == 'plan') {
-        let plan = new Modal()
-            .setCustomId('plan')
-            .setTitle('Book Controlling Session')
-            .addComponents(
-          new TextInputComponent()
-              .setCustomId('pos')
-              .setLabel('What Position? Format: NZAA_CTR')
-              .setStyle(('SHORT'))
-              .setMinLength(8)
-              .setMaxLength(12)
-              .setRequired(true),
-          new TextInputComponent()
-              .setCustomId('date')
-              .setLabel('What Date? Format: 25/06')
-              .setStyle(('SHORT'))
-              .setMinLength(5)
-              .setMaxLength(5)
-              .setRequired(true),
-          new TextInputComponent()
-              .setCustomId('start')
-              .setLabel('What Time Do You Plan To Start ? Format: 1800')
-              .setStyle(('SHORT'))
-              .setMinLength(4)
-              .setMaxLength(4)
-              .setRequired(true),
-          new TextInputComponent()
-              .setCustomId('end')
-              .setLabel('What Time Do You Plan To End ? Format: 1900')
-              .setStyle(('SHORT'))
-              .setMinLength(4)
-              .setMaxLength(4)
-              .setRequired(true),
-          new TextInputComponent()
-              .setCustomId('event')
-              .setLabel('Is This A Event? Format: Christchurch Control')
-              .setStyle(('SHORT'))
-              .setMinLength(0)
-              .setMaxLength(45)
-              .setRequired(false),
-        );showModal(plan, {
-                client: s4d.client,
-                interaction: interaction
-            })}
-    
-        });
+
+client.on('interactionCreate', async (i) => {
+  if (!i.isButton()) return;
+const userId = i.user.id;
+  const now = Date.now();
+  const cooldown = 5000; // 5 seconds
+
+  // Check if user is still on cooldown
+  if (buttonCooldowns.has(userId) && now - buttonCooldowns.get(userId) < cooldown) {
+    return i.reply({
+      content: '⏳ Please wait before clicking again.',
+      ephemeral: true
+    });
+  }
+
+  // Record the time of this button click
+  buttonCooldowns.set(userId, now);
+  if (i.customId === 'plan') {
+    const planModal = new ModalBuilder()
+      .setCustomId('plan')
+      .setTitle('Book Controlling Session')
+      .addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('pos')
+            .setLabel('What Position? Format: NZAA_CTR')
+            .setStyle(TextInputStyle.Short)
+            .setMinLength(8)
+            .setMaxLength(12)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('date')
+            .setLabel('What Date? Format: 25/06')
+            .setStyle(TextInputStyle.Short)
+            .setMinLength(5)
+            .setMaxLength(5)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('start')
+            .setLabel('What Time Do You Plan To Start? Format: 1800')
+            .setStyle(TextInputStyle.Short)
+            .setMinLength(4)
+            .setMaxLength(4)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('end')
+            .setLabel('What Time Do You Plan To End? Format: 1900')
+            .setStyle(TextInputStyle.Short)
+            .setMinLength(4)
+            .setMaxLength(4)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('event')
+            .setLabel('Is This An Event? If So, What Event?')
+            .setStyle(TextInputStyle.Short)
+            .setMaxLength(45)
+            .setRequired(false)
+        )
+      );
+
+    // ✅ Native v14 call to show the modal
+    await i.showModal(planModal);
+  }
+});
     
     const event = new Database('./event.json')
-    synchronizeSlashCommands(s4d.client, [
+
+
+syncCommands(client, [
+  {
+    name: 'viewbookings',
+    description: 'View your controller bookings.'
+  },
+  {
+    name: 'deletebookings',
+    description: 'Delete your controller bookings.'
+  },
+  {
+    name: 'openeventposition',
+    description: 'Open event positions.',
+    options: [
       {
-          name: 'editbookings',
-      		description: 'Edit your controller bookings.',
-      		options: [
-    
-          ]
-      },{
-          name: 'viewbookings',
-      		description: 'View your controller bookings.',
-      		options: [
-    
-          ]
-      },{
-          name: 'deletebookings',
-      		description: 'Delete your controller bookings.',
-      		options: [
-    
-          ]
-      },{
-          name: 'openeventposition',
-      		description: 'Open event positions.',
-      		options: [
-              {
-            type: 3,
-        	name: 'position',
-            required: true,
-        	description: 'What position do you want to open?',
-            choices: [
-                  {
-              name: String('nzzo-e_fss'),
-              value: String('NZZO-E_FSS')
-          },{
-              name: String('nzaa-r_ctr'),
-              value: String('NZAA-R_CTR')
-          },{
-              name: String('nzch-d_ctr'),
-              value: String('NZCH-D_CTR')
-          },{
-              name: String('nzaa_dep'),
-              value: String('NZAA_DEP')
-          },{
-              name: String('nzch_dep'),
-              value: String('NZCH_DEP')
-          },{
-              name: String('nzwn_dep'),
-              value: String('NZWN_DEP')
-          },{
-              name: String('nstu_twr'),
-              value: String('NSTU_TWR')
-          },{
-              name: String('nzmf_twr'),
-              value: String('NZMF_TWR')
-          },{
-              name: String('nzpp_twr'),
-              value: String('NZPP_TWR')
-          },{
-              name: String('nzfx_gnd'),
-              value: String('NZFX_GND')
-          },{
-              name: String('nzqn_gnd'),
-              value: String('NZQN_GND')
-          },{
-              name: String('ncrg_del'),
-              value: String('NCRG_DEL')
-          },{
-              name: String('nzfx_del'),
-              value: String('NZFX_DEL')
-          },
-            ]
-        },{
-            type: 3,
-        	name: 'date',
-            required: true,
-        	description: 'What date do you want to open? Format: DD/MM',
-            choices: [
-    
-            ]
-        },
-          ]
-      },{
-          name: 'closeeventposition',
-      		description: 'Close event positions.',
-      		options: [
-              {
-            type: 3,
-        	name: 'position',
-            required: true,
-        	description: 'What position do you want to close?',
-            choices: [
-                  {
-              name: String('nzzo-e_fss'),
-              value: String('NZZO-E_FSS')
-          },{
-              name: String('nzaa-r_ctr'),
-              value: String('NZAA-R_CTR')
-          },{
-              name: String('nzch-d_ctr'),
-              value: String('NZCH-D_CTR')
-          },{
-              name: String('nzaa_dep'),
-              value: String('NZAA_DEP')
-          },{
-              name: String('nzch_dep'),
-              value: String('NZCH_DEP')
-          },{
-              name: String('nzwn_dep'),
-              value: String('NZWN_DEP')
-          },{
-              name: String('nstu_twr'),
-              value: String('NSTU_TWR')
-          },{
-              name: String('nzmf_twr'),
-              value: String('NZMF_TWR')
-          },{
-              name: String('nzpp_twr'),
-              value: String('NZPP_TWR')
-          },{
-              name: String('nzfx_gnd'),
-              value: String('NZFX_GND')
-          },{
-              name: String('nzqn_gnd'),
-              value: String('NZQN_GND')
-          },{
-              name: String('ncrg_del'),
-              value: String('NCRG_DEL')
-          },{
-              name: String('nzfx_del'),
-              value: String('NZFX_DEL')
-          },
-            ]
-        },
-          ]
-      },{
-          name: 'mentor',
-      		description: 'Tag your mentor in your post',
-      		options: [
-              {
-            type: 6,
-        	name: 'mentor',
-            required: true,
-        	description: 'Tag your mentor. Format: @mymentor',
-            choices: [
-    
-            ]
-        },
-          ]
+        type: 3, // STRING
+        name: 'position',
+        description: 'What position do you want to open?',
+        required: true,
+        choices: [
+          { name: 'nzzo-e_fss', value: 'NZZO-E_FSS' },
+          { name: 'nzaa-r_ctr', value: 'NZAA-R_CTR' },
+          { name: 'nzch-d_ctr', value: 'NZCH-D_CTR' },
+          { name: 'nzaa_dep', value: 'NZAA_DEP' },
+          { name: 'nzch_dep', value: 'NZCH_DEP' },
+          { name: 'nzwn_dep', value: 'NZWN_DEP' },
+          { name: 'nstu_twr', value: 'NSTU_TWR' },
+          { name: 'nzmf_twr', value: 'NZMF_TWR' },
+          { name: 'nzpp_twr', value: 'NZPP_TWR' },
+          { name: 'nzfx_gnd', value: 'NZFX_GND' },
+          { name: 'nzqn_gnd', value: 'NZQN_GND' },
+          { name: 'ncrg_del', value: 'NCRG_DEL' },
+          { name: 'nzfx_del', value: 'NZFX_DEL' }
+        ]
       },
-    ],{
-        debug: false,
+      {
+        type: 3, // STRING
+        name: 'date',
+        description: 'What date do you want to open? Format: DD/MM',
+        required: true
+      }
+    ]
+  },
+  {
+    name: 'closeeventposition',
+    description: 'Close event positions.',
+    options: [
+      {
+        type: 3, // STRING
+        name: 'position',
+        description: 'What position do you want to close?',
+        required: true,
+        choices: [
+          { name: 'nzzo-e_fss', value: 'NZZO-E_FSS' },
+          { name: 'nzaa-r_ctr', value: 'NZAA-R_CTR' },
+          { name: 'nzch-d_ctr', value: 'NZCH-D_CTR' },
+          { name: 'nzaa_dep', value: 'NZAA_DEP' },
+          { name: 'nzch_dep', value: 'NZCH_DEP' },
+          { name: 'nzwn_dep', value: 'NZWN_DEP' },
+          { name: 'nstu_twr', value: 'NSTU_TWR' },
+          { name: 'nzmf_twr', value: 'NZMF_TWR' },
+          { name: 'nzpp_twr', value: 'NZPP_TWR' },
+          { name: 'nzfx_gnd', value: 'NZFX_GND' },
+          { name: 'nzqn_gnd', value: 'NZQN_GND' },
+          { name: 'ncrg_del', value: 'NCRG_DEL' },
+          { name: 'nzfx_del', value: 'NZFX_DEL' }
+        ]
+      }
+    ]
+  },
+  {
+    name: 'mentor',
+    description: 'Tag your mentor in your post',
+    options: [
+      {
+        type: 6, // USER
+        name: 'mentor',
+        description: 'Tag your mentor. Format: @mymentor',
+        required: true
+      }
+    ]
+  }
+], {
+  debug: false
+});
     
-    });
-    
-    s4d.client.on('interactionCreate', async (interaction) => {
+    client.on('interactionCreate', async (interaction) => {
               if ((interaction.commandName) == 'viewbookings') {
         const Database = require("easy-json-database");
         const messages = new Database("./messages.json");
-        const { MessageEmbed } = require('discord.js');
+        const { EmbedBuilder } = require('discord.js');
     
         const userId = String(interaction.member.user.id);
         const userBookings = messages.get(userId);
@@ -512,7 +440,7 @@ async function sendBooking({ callsign, cid, start, end }) {
           return dateA - dateB;
         });
     
-        const embed = new MessageEmbed()
+        const embed = new EmbedBuilder()
           .setTitle('📋 Your Bookings')
           .setColor('#00AEFF')
           .setDescription(
@@ -520,7 +448,7 @@ async function sendBooking({ callsign, cid, start, end }) {
               `• **${b.position}** on **${b.date}** from **${b.start}** to **${b.end}**`
             ).join('\n')
           )
-          .setFooter('Use /deletebooking to remove a booking.');
+          .setFooter({ text: 'Use /deletebooking to remove a booking.' });
     
         await interaction.reply({ embeds: [embed], ephemeral: true });
     
@@ -528,23 +456,28 @@ async function sendBooking({ callsign, cid, start, end }) {
     
         });
     
-    s4d.client.on('modalSubmit', async (i) => {
-      if (i.customId !== 'plan') return;
-    
-      const { MessageEmbed, MessageActionRow, MessageSelectMenu } = require('discord.js');
-      const Database = require('easy-json-database');
-      const messages = new Database('./messages.json');
-      const eventDB = new Database('./event.json');
-    
-      const member = i.member;
-      const userId = member.user.id;
-    
-      const posRaw = i.getTextInputValue('pos');
-      const pos = posRaw.trim().toUpperCase();
-      const date = i.getTextInputValue('date').trim();
-      const start = parseInt(i.getTextInputValue('start').trim());
-      const end = parseInt(i.getTextInputValue('end').trim());
-      const eventName = i.getTextInputValue('event');
+    client.on('interactionCreate', async (i) => {
+  // Only handle modal submissions
+  if (!i.isModalSubmit()) return;
+
+  if (i.customId !== 'plan') return;
+
+  const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
+  const Database = require('easy-json-database');
+  const messages = new Database('./messages.json');
+  const eventDB = new Database('./event.json');
+
+  const member = i.member;
+  const userId = member.user.id;
+
+  // ✅ Native v14 way to get modal field values
+  const posRaw = i.fields.getTextInputValue('pos');
+  const pos = posRaw.trim().toUpperCase();
+  const date = i.fields.getTextInputValue('date').trim();
+  const start = parseInt(i.fields.getTextInputValue('start').trim());
+  const end = parseInt(i.fields.getTextInputValue('end').trim());
+  const eventName = i.fields.getTextInputValue('event');
+
     
       const autoInheritanceMap = {
         "NZAA_CTR": ["NZCH-B_CTR"],
@@ -576,7 +509,69 @@ async function sendBooking({ callsign, cid, start, end }) {
     
       if (posRaw !== pos) return i.reply({ content: '❌ Position must be in ALL CAPS.', ephemeral: true });
       if (isNaN(start) || isNaN(end)) return i.reply({ content: '❌ Start and End times must be valid numbers.', ephemeral: true });
-    
+    // --- Callsign validation ---
+const callsignRegex = /^(?:[A-Z]{4}_[A-Z]{3}|NZCH-[A-Z]_CTR)$/;
+if (!callsignRegex.test(pos)) {
+  await i.reply({
+    content: '❌ Invalid callsign format. Must be XXXX_XXX or NZCH-X_CTR, no numbers allowed.',
+    ephemeral: true
+  });
+  return;
+}
+
+// --- Date (raw string) ---
+const dateRaw = i.fields.getTextInputValue('date').trim();
+
+// --- Time (raw strings) ---
+const startRaw = i.fields.getTextInputValue('start').trim();
+const endRaw = i.fields.getTextInputValue('end').trim();
+
+// --- Time validation ---
+function isValidTime(timeStr) {
+  if (!/^\d{4}$/.test(timeStr)) return false; // must be 4 digits
+  const hours = parseInt(timeStr.slice(0, 2), 10);
+  const minutes = parseInt(timeStr.slice(2), 10);
+  return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+}
+
+if (!isValidTime(startRaw) || !isValidTime(endRaw)) {
+  await i.reply({
+    content: '❌ Start and End times must be valid 24-hour times (HHMM).',
+    ephemeral: true
+  });
+  return;
+}
+
+// parse once after validation
+const starts = parseInt(startRaw, 10);
+const ends = parseInt(endRaw, 10);
+
+if (starts >= ends) {
+  await i.reply({
+    content: '❌ Start time must be before End time.',
+    ephemeral: true
+  });
+  return;
+}
+
+// --- Date validation ---
+function isValidDate(dateStr) {
+  if (!/^\d{2}\/\d{2}$/.test(dateStr)) return false;
+  const [day, month] = dateStr.split('/').map(Number);
+  if (month < 1 || month > 12) return false;
+  const daysInMonth = new Date(new Date().getFullYear(), month, 0).getDate();
+  return day >= 1 && day <= daysInMonth;
+}
+
+if (!isValidDate(dateRaw)) {
+  await i.reply({
+    content: '❌ Date must be valid and in format DD/MM (e.g., 05/12).',
+    ephemeral: true
+  });
+  return;
+}
+
+
       const eventKeys = Object.keys(eventDB.all()).reduce((acc, key) => {
         acc[key.toUpperCase()] = eventDB.get(key);
         return acc;
@@ -630,10 +625,10 @@ async function sendBooking({ callsign, cid, start, end }) {
     
           if (removedSectors.length > 0) {
             try {
-              const channel = s4d.client.channels.cache.get('1424637009686696040');
+              const channel = client.channels.cache.get('1449677599390568632');
               const msg = await channel.messages.fetch(b.messageId);
               const embed = msg.embeds[0];
-              const newEmbed = new MessageEmbed()
+              const newEmbed = new EmbedBuilder()
                 .setColor(embed.color)
                 .setTitle(embed.title)
                 .setTimestamp(embed.timestamp)
@@ -642,13 +637,13 @@ async function sendBooking({ callsign, cid, start, end }) {
     
               for (const field of embed.fields) {
                 if (field.name !== 'Extended Sectors') {
-                  newEmbed.addField(field.name, field.value, field.inline);
+                  newEmbed.addFields({ name: field.name, value: field.value, inline: field.inline });
                 }
               }
     
               if (b.extendedSectors.length > 0) {
                 const display = b.extendedSectors.map(s => sectorCodeMap[s] || s);
-                newEmbed.addField('Extended Sectors', display.join(', '), false);
+                newEmbed.addFields({ name: 'Extended Sectors', value: display.join(', '), inline: false });
               }
     
               await msg.edit({ embeds: [newEmbed] });
@@ -657,7 +652,7 @@ async function sendBooking({ callsign, cid, start, end }) {
             }
     
             try {
-              const user = await s4d.client.users.fetch(otherUserId);
+              const user = await client.users.fetch(otherUserId);
               const reason = otherUserId === userId
                 ? 'You booked a new session that overrides these sectors.'
                 : 'Another controller booked or inherited these sectors.';
@@ -665,7 +660,7 @@ async function sendBooking({ callsign, cid, start, end }) {
               await user.send({
                 content: `📭 One or more extended sectors were removed from your booking.`,
                 embeds: [
-                  new MessageEmbed()
+                  new EmbedBuilder()
                     .setColor('#FF0000')
                     .setTitle('Extended Sectors Removed')
                     .setDescription(
@@ -694,7 +689,7 @@ if (!vatsimId) {
   return i.reply({ content: '❌ Could not retrieve your VATSIM ID. Please ensure your Discord is linked Here: https://community.vatsim.net/', ephemeral: true });
 }
 
-// --- Send booking to VATSIM API ---
+/*// --- Send booking to VATSIM API ---
 const bookingvatid = await sendBooking({
   callsign: pos,
   cid: vatsimId,
@@ -705,21 +700,26 @@ const bookingvatid = await sendBooking({
 if (!bookingvatid) {
   return i.reply({ content: '❌ Booking failed. Please try again later.', ephemeral: true });
 }
+  */
 
-      const bookingEmbed = new MessageEmbed()
+      const bookingEmbed = new EmbedBuilder()
         .setColor('#000000')
         .setTitle(pos)
         .setTimestamp(new Date())
-        .addField('Date', date, false)
-        .addField('Start', String(start), true)
-        .addField('End', String(end), true)
-        .addField('Controller', `<@${userId}>`, false)
+        .addFields(
+  { name: 'Date', value: date, inline: false },
+  { name: 'Start', value: String(start), inline: true },
+  { name: 'End', value: String(end), inline: true },
+  { name: 'Controller', value: `<@${userId}>`, inline: false }
+)
         .setThumbnail(member.user.displayAvatarURL({ format: "png" }));
     
-      if (eventName) bookingEmbed.addField('Event', eventName, false);
+      if (eventName) {
+  bookingEmbed.addFields({ name: 'Event', value: eventName, inline: false });
+}
       if (extendedSectors.length > 0) {
         const display = extendedSectors.map(s => sectorCodeMap[s] || s);
-        bookingEmbed.addField('Extended Sectors', display.join(', '), false);
+        bookingEmbed.addFields({ name: 'Extended Sectors', value: display.join(', '), inline: false });
       }
     
       for (const [roleId, label] of Object.entries(roleMap)) {
@@ -729,7 +729,7 @@ if (!bookingvatid) {
         }
       }
     
-      const channel = s4d.client.channels.cache.get('1424637009686696040');
+      const channel = client.channels.cache.get('1449677599390568632');
       const sentMessage = await channel.send({ embeds: [bookingEmbed] });
     
       const existing = messages.get(userId);
@@ -741,7 +741,7 @@ userBookings.push({
   end,
   messageId: sentMessage.id,
   extendedSectors,
-  bookingvatid // <-- new field added here
+  // bookingvatid // <-- new field added here
 });
 messages.set(userId, userBookings);
 
@@ -789,8 +789,8 @@ messages.set(userId, userBookings);
             value: `${sentMessage.id}|${sector}`
           }));
     
-          const row = new MessageActionRow().addComponents(
-            new MessageSelectMenu()
+          const row = new ActionRowBuilder().addComponents(
+            new SelectMenuBuilder()
               .setCustomId('extend_sector_select')
               .setPlaceholder('Select sectors to extend into')
               .setMinValues(0)
@@ -814,7 +814,7 @@ messages.set(userId, userBookings);
     
     
     const messages = new Database('./messages.json')
-    s4d.client.on('interactionCreate', async (interaction) => {
+    client.on('interactionCreate', async (interaction) => {
               if ((interaction.commandName) == 'openeventposition') {
         event.set(String((interaction.options.getString('position'))), (interaction.options.getString('date')));
         const position = interaction.options.getString('position');
@@ -847,7 +847,7 @@ messages.set(userId, userBookings);
           ]
         };
     
-        const channel = s4d.client.channels.cache.get('1424637009686696040');
+        const channel = client.channels.cache.get('1449677599390568632');
         const sentMessage = await channel.send({ embeds: [embed] });
     
         eventclose.set(position, sentMessage.id);
@@ -857,11 +857,10 @@ messages.set(userId, userBookings);
     
         });
     
-    s4d.client.on('interactionCreate', async (interaction) => {
+    client.on('interactionCreate', async (interaction) => {
       if (!interaction.isSelectMenu()) return;
       if (interaction.customId !== 'extend_sector_select') return;
     
-      console.log('✅ Select menu interaction received');
     
       try {
         const Database = require("easy-json-database");
@@ -878,23 +877,19 @@ messages.set(userId, userBookings);
         };
     
         const selections = interaction.values;
-        console.log('🧠 Selected values:', selections);
     
         const userId = String(interaction.member.user.id);
         const userBookings = messages.get(userId);
         if (!Array.isArray(userBookings)) {
-          console.log('❌ No bookings found for user');
           return;
         }
     
         const [messageId] = selections[0].split('|');
         const booking = userBookings.find(b => b.messageId === messageId);
         if (!booking) {
-          console.log('❌ Booking not found for message ID:', messageId);
           return;
         }
     
-        console.log('📦 Booking found:', booking);
     
         const rawDB = messages.all();
         const unavailable = new Set();
@@ -919,8 +914,6 @@ messages.set(userId, userBookings);
           }
         }
     
-        console.log('🚫 Unavailable sectors:', Array.from(unavailable));
-    
         let updated = false;
     
         for (const selection of selections) {
@@ -928,17 +921,15 @@ messages.set(userId, userBookings);
           if (!unavailable.has(sector) && !booking.extendedSectors.includes(sector)) {
             booking.extendedSectors.push(sector);
             updated = true;
-            console.log(`✅ Sector ${sector} added to booking`);
           } else {
-            console.log(`⚠️ Sector ${sector} is unavailable or already added`);
           }
         }
     
         if (updated) {
-          const channel = s4d.client.channels.cache.get('1424637009686696040');
+          const channel = client.channels.cache.get('1449677599390568632');
           const msg = await channel.messages.fetch(messageId);
           const embed = msg.embeds[0];
-          const newEmbed = new Discord.MessageEmbed()
+          const newEmbed = new Discord.EmbedBuilder()
             .setColor(embed.color)
             .setTitle(embed.title)
             .setTimestamp(embed.timestamp)
@@ -947,20 +938,18 @@ messages.set(userId, userBookings);
     
           for (const field of embed.fields) {
             if (field.name !== 'Extended Sectors') {
-              newEmbed.addField(field.name, field.value, field.inline);
+              newEmbed.addFields({ name: field.name, value: field.value, inline: field.inline });
             }
           }
     
           if (booking.extendedSectors.length > 0) {
             const display = booking.extendedSectors.map(s => sectorCodeMap[s] || s);
-            newEmbed.addField('Extended Sectors', display.join(', '), false);
+            newEmbed.addFields({ name: 'Extended Sectors', value: display.join(', '), inline: false });
           }
     
           await msg.edit({ embeds: [newEmbed] });
-          console.log('🖊️ Embed updated');
     
           messages.set(userId, userBookings);
-          console.log('💾 Database updated');
         }
     
         if (interaction.replied || interaction.deferred) {
@@ -969,7 +958,6 @@ messages.set(userId, userBookings);
           await interaction.reply({ content: '✅ Extended sectors updated.', components: [], ephemeral: true });
         }
     
-        console.log('📨 Interaction response sent');
     
       } catch (err) {
         console.error('❌ Error in extend_sector_select handler:', err);
@@ -987,10 +975,10 @@ messages.set(userId, userBookings);
     
     
     const eventclose = new Database('./eventclose.json')
-    s4d.client.on('interactionCreate', async (interaction) => {
+    client.on('interactionCreate', async (interaction) => {
               if ((interaction.commandName) == 'closeeventposition') {
         event.set(String((interaction.options.getString('position'))), '0/0');
-        s4d.client.channels.cache.get('1424637009686696040').messages.fetch(eventclose.get(String((interaction.options.getString('position'))))).then(async (s4dmessage) =>{
+        client.channels.cache.get('1449677599390568632').messages.fetch(eventclose.get(String((interaction.options.getString('position'))))).then(async (s4dmessage) =>{
            (s4dmessage).delete()
               await interaction.reply({ content: (String(interaction.options.getString('position')) + ' closed!'), ephemeral: true, components: [] });
     
@@ -998,7 +986,7 @@ messages.set(userId, userBookings);
     
         });
     
-    s4d.client.on('interactionCreate', async (interaction) => {
+    client.on('interactionCreate', async (interaction) => {
       if (!interaction.isSelectMenu()) return;
       if (interaction.customId !== 'mentor_booking_select') return;
     
@@ -1022,18 +1010,18 @@ messages.set(userId, userBookings);
   
       let messageLink = '';
       try {
-        const channel = s4d.client.channels.cache.get('1424637009686696040');
+        const channel = client.channels.cache.get('1449677599390568632');
         const s4dmessage = await channel.messages.fetch(booking.messageId);
         await s4dmessage.react('👍');
     
-        const guildId = s4d.client.guilds.cache.get('1424636974312198187').id;
+        const guildId = client.guilds.cache.get('1424636974312198187').id;
         messageLink = `https://discord.com/channels/${guildId}/${channel.id}/${booking.messageId}`;
       } catch (err) {
         console.error('❌ Failed to react or fetch message:', err);
       }
     
       try {
-        const guild = s4d.client.guilds.cache.get('1424636974312198187');
+        const guild = client.guilds.cache.get('1424636974312198187');
         const mentorMember = guild.members.cache.get(mentorId) || await guild.members.fetch(mentorId);
     
         await mentorMember.send({
@@ -1056,9 +1044,9 @@ messages.set(userId, userBookings);
     });
     
     
-    s4d.client.on('interactionCreate', async (interaction) => {
+    client.on('interactionCreate', async (interaction) => {
               if ((interaction.commandName) == 'mentor') {
-        const { MessageActionRow, MessageSelectMenu } = require('discord.js');
+        const { ActionRowBuilder, SelectMenuBuilder } = require('discord.js');
         const Database = require("easy-json-database");
         const messages = new Database("./messages.json");
     
@@ -1080,8 +1068,8 @@ messages.set(userId, userBookings);
           value: `${index}|${mentor.id}` 
         }));
     
-        const row = new MessageActionRow().addComponents(
-          new MessageSelectMenu()
+        const row = new ActionRowBuilder().addComponents(
+          new SelectMenuBuilder()
             .setCustomId('mentor_booking_select')
             .setPlaceholder(`Select a booking to notify ${mentor.user.username}`)
             .addOptions(options)
@@ -1119,7 +1107,7 @@ messages.set(userId, userBookings);
             updatedBookings.push(booking);
           } else {
             try {
-              const channel = s4d.client.channels.cache.get('1424637009686696040');
+              const channel = client.channels.cache.get('1449677599390568632');
               const msg = await channel.messages.fetch(booking.messageId);
               await msg.delete();
             } catch (err) {
@@ -1131,7 +1119,6 @@ messages.set(userId, userBookings);
         messages.set(userId, updatedBookings);
       }
     
-      console.log(`🧹 Booking cleanup ran at ${now.toLocaleString()}`);
     }, 60 * 60 * 1000);
     
     return s4d
