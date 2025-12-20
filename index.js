@@ -44,6 +44,7 @@ require('dotenv').config();
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMessages
   ],
   partials: [Partials.Channel, Partials.Message]
@@ -195,11 +196,11 @@ async function sendBooking({ callsign, cid, start, end }) {
     }
   }
 */
-  // --- Remove booking locally ---
+
   userBookings.splice(selectedIndex, 1);
   messages.set(userId, userBookings);
 
-  // --- Delete the Discord message if it exists ---
+
   try {
     const channel = interaction.channel;
     const messageToDelete = await channel.messages.fetch(booking.messageId);
@@ -230,7 +231,7 @@ async function sendBooking({ callsign, cid, start, end }) {
       event.set(String('NZQN_GND'), '0/0');
       event.set(String('NCRG_DEL'), '0/0');
       event.set(String('NZFX_DEL'), '0/0');
-      var plan_embed = new Discord.EmbedBuilder();
+       var plan_embed = new Discord.EmbedBuilder();
          plan_embed.setColor('#000000');
         plan_embed.setTitle(String('Book A Controlling Session'))
         plan_embed.setDescription(String('Controllers may post in this channel indicating that they intend to log onto a specific callsign at a specific time. This channel does not act as a booking system, but merely a heads-up that you intend to log on around that time.'));
@@ -252,6 +253,7 @@ async function sendBooking({ callsign, cid, start, end }) {
               components: [new ActionRowBuilder().addComponents(plan)],
               embeds: [plan_embed]
               });
+              
     });
     
 
@@ -259,9 +261,9 @@ client.on('interactionCreate', async (i) => {
   if (!i.isButton()) return;
 const userId = i.user.id;
   const now = Date.now();
-  const cooldown = 5000; // 5 seconds
+  const cooldown = 5000;
 
-  // Check if user is still on cooldown
+
   if (buttonCooldowns.has(userId) && now - buttonCooldowns.get(userId) < cooldown) {
     return i.reply({
       content: '⏳ Please wait before clicking again.',
@@ -269,7 +271,7 @@ const userId = i.user.id;
     });
   }
 
-  // Record the time of this button click
+
   buttonCooldowns.set(userId, now);
   if (i.customId === 'plan') {
     const planModal = new ModalBuilder()
@@ -322,7 +324,7 @@ const userId = i.user.id;
         )
       );
 
-    // ✅ Native v14 call to show the modal
+
     await i.showModal(planModal);
   }
 });
@@ -344,7 +346,7 @@ syncCommands(client, [
     description: 'Open event positions.',
     options: [
       {
-        type: 3, // STRING
+        type: 3,
         name: 'position',
         description: 'What position do you want to open?',
         required: true,
@@ -365,7 +367,7 @@ syncCommands(client, [
         ]
       },
       {
-        type: 3, // STRING
+        type: 3,
         name: 'date',
         description: 'What date do you want to open? Format: DD/MM',
         required: true
@@ -377,7 +379,7 @@ syncCommands(client, [
     description: 'Close event positions.',
     options: [
       {
-        type: 3, // STRING
+        type: 3,
         name: 'position',
         description: 'What position do you want to close?',
         required: true,
@@ -404,7 +406,7 @@ syncCommands(client, [
     description: 'Tag your mentor in your post',
     options: [
       {
-        type: 6, // USER
+        type: 6,
         name: 'mentor',
         description: 'Tag your mentor. Format: @mymentor',
         required: true
@@ -457,7 +459,7 @@ syncCommands(client, [
         });
     
     client.on('interactionCreate', async (i) => {
-  // Only handle modal submissions
+
   if (!i.isModalSubmit()) return;
 
   if (i.customId !== 'plan') return;
@@ -470,7 +472,7 @@ syncCommands(client, [
   const member = i.member;
   const userId = member.user.id;
 
-  // ✅ Native v14 way to get modal field values
+ 
   const posRaw = i.fields.getTextInputValue('pos');
   const pos = posRaw.trim().toUpperCase();
   const date = i.fields.getTextInputValue('date').trim();
@@ -509,7 +511,7 @@ syncCommands(client, [
     
       if (posRaw !== pos) return i.reply({ content: '❌ Position must be in ALL CAPS.', ephemeral: true });
       if (isNaN(start) || isNaN(end)) return i.reply({ content: '❌ Start and End times must be valid numbers.', ephemeral: true });
-    // --- Callsign validation ---
+
 const callsignRegex = /^(?:[A-Z]{4}_[A-Z]{3}|NZCH-[A-Z]_CTR)$/;
 if (!callsignRegex.test(pos)) {
   await i.reply({
@@ -519,16 +521,16 @@ if (!callsignRegex.test(pos)) {
   return;
 }
 
-// --- Date (raw string) ---
+
 const dateRaw = i.fields.getTextInputValue('date').trim();
 
-// --- Time (raw strings) ---
+
 const startRaw = i.fields.getTextInputValue('start').trim();
 const endRaw = i.fields.getTextInputValue('end').trim();
 
-// --- Time validation ---
+
 function isValidTime(timeStr) {
-  if (!/^\d{4}$/.test(timeStr)) return false; // must be 4 digits
+  if (!/^\d{4}$/.test(timeStr)) return false; 
   const hours = parseInt(timeStr.slice(0, 2), 10);
   const minutes = parseInt(timeStr.slice(2), 10);
   return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
@@ -542,7 +544,7 @@ if (!isValidTime(startRaw) || !isValidTime(endRaw)) {
   return;
 }
 
-// parse once after validation
+
 const starts = parseInt(startRaw, 10);
 const ends = parseInt(endRaw, 10);
 
@@ -554,7 +556,7 @@ if (starts >= ends) {
   return;
 }
 
-// --- Date validation ---
+
 function isValidDate(dateStr) {
   if (!/^\d{2}\/\d{2}$/.test(dateStr)) return false;
   const [day, month] = dateStr.split('/').map(Number);
@@ -679,11 +681,11 @@ if (!isValidDate(dateRaw)) {
           }
         }
       }
-// --- Prepare UTC times ---
+
 const startUTC = convertToUTC(date, String(start).padStart(4, '0'));
 const endUTC = convertToUTC(date, String(end).padStart(4, '0'));
 
-// --- Get VATSIM ID ---
+
 const vatsimId = await getVatsimId(userId);
 if (!vatsimId) {
   return i.reply({ content: '❌ Could not retrieve your VATSIM ID. Please ensure your Discord is linked Here: https://community.vatsim.net/', ephemeral: true });
@@ -741,7 +743,7 @@ userBookings.push({
   end,
   messageId: sentMessage.id,
   extendedSectors,
-  // bookingvatid // <-- new field added here
+  // bookingvatid
 });
 messages.set(userId, userBookings);
 
@@ -811,52 +813,45 @@ messages.set(userId, userBookings);
         });
       }
     });
-    
-    
-    const messages = new Database('./messages.json')
-    client.on('interactionCreate', async (interaction) => {
-              if ((interaction.commandName) == 'openeventposition') {
-        event.set(String((interaction.options.getString('position'))), (interaction.options.getString('date')));
-        const position = interaction.options.getString('position');
-        const date = interaction.options.getString('date');
+    const messages = new Database('./messages.json');
 
-        if (!/^\d{2}\/\d{2}$/.test(date)) {
-          await interaction.reply({
-            content: 'Date must be in the format DD/MM (e.g., 06/25). Please correct it.',
-            ephemeral: true
-          });
-          return;
-        }
-    
-        event.set(position, date);
-    
-        const embed = {
-          color: '#000000',
-          title: 'Event Position Opened',
-          fields: [
-            {
-              name: 'Date',
-              value: date,
-              inline: false
-            },
-            {
-              name: 'Position',
-              value: position,
-              inline: false
-            }
-          ]
-        };
-    
-        const channel = client.channels.cache.get('1449677599390568632');
-        const sentMessage = await channel.send({ embeds: [embed] });
-    
-        eventclose.set(position, sentMessage.id);
-    
-        await interaction.reply({ content: (String(interaction.options.getString('position')) + ' opened!'), ephemeral: true, components: [] });
-      }
-    
-        });
-    
+client.on('interactionCreate', async (interaction) => {
+  if (interaction.commandName === 'openeventposition') {
+
+    const position = interaction.options.getString('position');
+    const date = interaction.options.getString('date');
+
+    if (!/^\d{2}\/\d{2}$/.test(date)) {
+      await interaction.reply({
+        content: 'Date must be in the format DD/MM (e.g., 06/25). Please correct it.',
+        ephemeral: true
+      });
+      return;
+    }
+
+    event.set(position, date);
+
+    const embed = {
+      color: 0x000000,
+      title: 'Event Position Opened',
+      fields: [
+        { name: 'Date', value: date, inline: false },
+        { name: 'Position', value: position, inline: false }
+      ]
+    };
+
+    const channel = client.channels.cache.get('1449677599390568632');
+    const sentMessage = await channel.send({ embeds: [embed] });
+
+    eventclose.set(position, sentMessage.id);
+
+    await interaction.reply({
+      content: `${position} opened!`,
+      ephemeral: true
+    });
+  }
+});
+
     client.on('interactionCreate', async (interaction) => {
       if (!interaction.isSelectMenu()) return;
       if (interaction.customId !== 'extend_sector_select') return;
@@ -1120,6 +1115,6 @@ messages.set(userId, userBookings);
       }
     
     }, 60 * 60 * 1000);
-    
+  
     return s4d
 })();
