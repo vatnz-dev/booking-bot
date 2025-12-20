@@ -464,7 +464,7 @@ syncCommands(client, [
 
   if (i.customId !== 'plan') return;
 
-  const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
+
   const Database = require('easy-json-database');
   const messages = new Database('./messages.json');
   const eventDB = new Database('./event.json');
@@ -633,7 +633,7 @@ if (!isValidDate(dateRaw)) {
               const newEmbed = new EmbedBuilder()
                 .setColor(embed.color)
                 .setTitle(embed.title)
-                .setTimestamp(embed.timestamp)
+                .setTimestamp()
                 .setThumbnail(embed.thumbnail?.url)
                 .setFooter(embed.footer?.text ? { text: embed.footer.text } : null);
     
@@ -790,7 +790,7 @@ messages.set(userId, userBookings);
             label: sector,
             value: `${sentMessage.id}|${sector}`
           }));
-    
+      const { EmbedBuilder, ActionRowBuilder, SelectMenuBuilder } = require('discord.js');
           const row = new ActionRowBuilder().addComponents(
             new SelectMenuBuilder()
               .setCustomId('extend_sector_select')
@@ -927,7 +927,7 @@ client.on('interactionCreate', async (interaction) => {
           const newEmbed = new Discord.EmbedBuilder()
             .setColor(embed.color)
             .setTitle(embed.title)
-            .setTimestamp(embed.timestamp)
+            .setTimestamp()
             .setThumbnail(embed.thumbnail?.url)
             .setFooter(embed.footer?.text ? { text: embed.footer.text } : null);
     
@@ -1022,7 +1022,7 @@ client.on('interactionCreate', async (interaction) => {
         await mentorMember.send({
           content: messageLink,
           embeds: [{
-            color: '#000000',
+            color: 0x000000,
             title: 'Your student has booked a session',
             description: `${interaction.user.username} has booked **${booking.position}** on **${booking.date}** at **${booking.start}** and tagged you. Please react with 👍 on the booking message above.`
           }]
