@@ -109,22 +109,31 @@ client.login(process.env.DISCORD_TOKEN);
         });
         const axios = require('axios');
 
-    // Convert DD/MM and HHMM to UTC string "YYYY-MM-DD HH:mm:ss"
 function convertToUTC(dateStr, timeStr) {
-  const [day, month] = dateStr.split('/');
-  const year = new Date().getFullYear();
+  const [day, month] = dateStr.split('/').map(Number);
+  let year = new Date().getFullYear();
 
-  // Parse time string like "1900" or "0210"
   const hours = parseInt(timeStr.slice(0, 2), 10);
   const minutes = parseInt(timeStr.slice(2), 10);
 
-  // Create NZ local time
-  const nzDate = new Date(Date.UTC(year, month - 1, day, hours, minutes));
-  // Adjust for NZDT offset (+13). Use +12 if NZST.
+
+  let nzDate = new Date(Date.UTC(year, month - 1, day, hours, minutes));
   nzDate.setHours(nzDate.getHours() - 13);
+
+
+  const nowNZ = new Date();
+  nowNZ.setHours(nowNZ.getHours() + 13);
+
+  
+  if (nzDate < nowNZ) {
+    year += 1;
+    nzDate = new Date(Date.UTC(year, month - 1, day, hours, minutes));
+    nzDate.setHours(nzDate.getHours() - 13);
+  }
 
   return nzDate.toISOString().replace('T', ' ').slice(0, 19);
 }
+
 
 // Get VATSIM ID from Discord ID
 async function getVatsimId(discordId) {
