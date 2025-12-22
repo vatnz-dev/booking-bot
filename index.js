@@ -463,6 +463,7 @@ syncCommands(client, [
   if (!i.isModalSubmit()) return;
 
   if (i.customId !== 'plan') return;
+await i.deferReply({ ephemeral: true });
 
 
   const Database = require('easy-json-database');
@@ -514,7 +515,7 @@ syncCommands(client, [
 
 const callsignRegex = /^(?:[A-Z]{4}_[A-Z]{3}|NZCH-[A-Z]_CTR)$/;
 if (!callsignRegex.test(pos)) {
-  await i.reply({
+  await i.editReply({
     content: '❌ Invalid callsign format. Must be XXXX_XXX or NZCH-X_CTR, no numbers allowed.',
     ephemeral: true
   });
@@ -537,7 +538,7 @@ function isValidTime(timeStr) {
 }
 
 if (!isValidTime(startRaw) || !isValidTime(endRaw)) {
-  await i.reply({
+  await i.editReply({
     content: '❌ Start and End times must be valid 24-hour times (HHMM).',
     ephemeral: true
   });
@@ -549,7 +550,7 @@ const starts = parseInt(startRaw, 10);
 const ends = parseInt(endRaw, 10);
 
 if (starts >= ends) {
-  await i.reply({
+  await i.editReply({
     content: '❌ Start time must be before End time.',
     ephemeral: true
   });
@@ -566,7 +567,7 @@ function isValidDate(dateStr) {
 }
 
 if (!isValidDate(dateRaw)) {
-  await i.reply({
+  await i.editReply({
     content: '❌ Date must be valid and in format DD/MM (e.g., 05/12).',
     ephemeral: true
   });
@@ -580,11 +581,11 @@ if (!isValidDate(dateRaw)) {
       }, {});
       const unlockedDate = eventKeys[pos];
       if (unlockedDate && unlockedDate !== date) {
-        return i.reply({ content: `❌ This position is locked. It is only unlocked for ${unlockedDate}.`, ephemeral: true });
+        return i.editReply({ content: `❌ This position is locked. It is only unlocked for ${unlockedDate}.`, ephemeral: true });
       }
     
       if (fssPositions.includes(pos) && !member._roles.includes(fssRoleId)) {
-        return i.reply({ content: '❌ You do not have the Oceanic Endorsement required to book this FSS position.', ephemeral: true });
+        return i.editReply({ content: '❌ You do not have the Oceanic Endorsement required to book this FSS position.', ephemeral: true });
       }
     
       const rawDB = messages.all();
@@ -602,7 +603,7 @@ if (!isValidDate(dateRaw)) {
           const bEnd = parseInt(b.end);
           const timeOverlap = !(end <= bStart || start >= bEnd);
           if (timeOverlap) {
-            return i.reply({ content: '❌ This time slot is already booked for that position.', ephemeral: true });
+            return i.editReply({ content: '❌ This time slot is already booked for that position.', ephemeral: true });
           }
         }
       }
@@ -688,7 +689,7 @@ const endUTC = convertToUTC(date, String(end).padStart(4, '0'));
 
 const vatsimId = await getVatsimId(userId);
 if (!vatsimId) {
-  return i.reply({ content: '❌ Could not retrieve your VATSIM ID. Please ensure your Discord is linked Here: https://community.vatsim.net/', ephemeral: true });
+  return i.editReply({ content: '❌ Could not retrieve your VATSIM ID. Please ensure your Discord is linked Here: https://community.vatsim.net/', ephemeral: true });
 }
 
 /*// --- Send booking to VATSIM API ---
@@ -700,7 +701,7 @@ const bookingvatid = await sendBooking({
 });
 
 if (!bookingvatid) {
-  return i.reply({ content: '❌ Booking failed. Please try again later.', ephemeral: true });
+  return i.editReply({ content: '❌ Booking failed. Please try again later.', ephemeral: true });
 }
   */
 
@@ -781,7 +782,7 @@ messages.set(userId, userBookings);
         );
     
         if (availableSectors.length === 0) {
-          await i.reply({
+          await i.editReply({
             content: '✅ Booking Created. No additional sectors available for extension.',
             ephemeral: true
           });
@@ -800,14 +801,14 @@ messages.set(userId, userBookings);
               .addOptions(options)
           );
     
-          await i.reply({
+          await i.editReply({
             content: '✅ Booking Created. Select sectors you want to extend into:',
             components: [row],
             ephemeral: true
           });
         }
       } else {
-        await i.reply({
+        await i.editReply({
           content: '✅ Booking Created. To delete, run /deletebooking with the same position and date.',
           ephemeral: true
         });
