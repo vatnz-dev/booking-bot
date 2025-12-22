@@ -138,28 +138,22 @@
 
   // Convert DD/MM and HHMM to UTC string "YYYY-MM-DD HH:mm:ss"
   function convertToUTC(dateStr, timeStr) {
+    const DateTime = require('luxon').DateTime;
+
     const [day, month] = dateStr.split('/').map(Number);
     let year = new Date().getFullYear();
 
-    const hours = parseInt(timeStr.slice(0, 2), 10);
-    const minutes = parseInt(timeStr.slice(2), 10);
+    const hours = timeStr.slice(0, 2);
+    const minutes = timeStr.slice(2);
 
+    let nzDate = DateTime.fromISO(`${year}-${month}-${day}T${hours}:${minutes}:00`).setZone('Pacific/Auckland');
+    const nowNZ = DateTime.now().setZone('Pacific/Auckland');
 
-    let nzDate = new Date(Date.UTC(year, month - 1, day, hours, minutes));
-    nzDate.setHours(nzDate.getHours() - 13);
-
-
-    const nowNZ = new Date();
-    nowNZ.setHours(nowNZ.getHours() + 13);
-
-    
     if (nzDate < nowNZ) {
-      year += 1;
-      nzDate = new Date(Date.UTC(year, month - 1, day, hours, minutes));
-      nzDate.setHours(nzDate.getHours() - 13);
+      nzDate = nzDate.plus({ years: 1 });
     }
 
-    return nzDate.toISOString().replace('T', ' ').slice(0, 19);
+    return nzDate.toISO();
   }
 
   // Get VATSIM ID from Discord ID
