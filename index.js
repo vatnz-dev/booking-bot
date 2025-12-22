@@ -100,43 +100,69 @@
   }
 
   client.on('interactionCreate', async (interaction) => {
+
+  // Slash commands
+  if (interaction.isChatInputCommand()) {
     switch (interaction.commandName) {
       case 'closeeventposition':
         await handleCloseEventPosition(interaction);
         break;
-      case 'deleteBookings':
+      case 'deletebookings':
         await handleDeleteBookings(interaction);
-        break;
-      case 'delete_booking_select':
-        await handleDeleteBookingSelect(interaction);
-        break;
-      case 'edit':
-        break;
-      case `extend_sector_select`:
-        await handleExtendSectorSelect(interaction);
         break;
       case 'mentor':
         await handleMentor(interaction);
         break;
-      case 'mentor_booking_select':
-        await handleMentorBookingSelect(interaction);
-        break;
       case 'openeventposition':
         await handleOpenEventPosition(interaction);
-        break;
-      case 'plan':
-        await handlePlan(interaction);
         break;
       case 'viewbookings':
         await handleViewBookings(interaction);
         break;
-
-      default:
-        console.warn(`Unknown command: ${interaction.commandName}`);
     }
-  });
+    return;
+  }
 
-  // Convert DD/MM and HHMM to UTC string "YYYY-MM-DD HH:mm:ss"
+  // Buttons
+  if (interaction.isButton()) {
+    switch (interaction.customId) {
+      case 'plan':
+        await handlePlan(interaction);
+        break;
+    }
+    return;
+  }
+
+  // Select menus
+  if (interaction.isStringSelectMenu()) {
+    switch (interaction.customId) {
+      case 'delete_booking_select':
+        await handleDeleteBookingSelect(interaction);
+        break;
+      case 'extend_sector_select':
+        await handleExtendSectorSelect(interaction);
+        break;
+      case 'mentor_booking_select':
+        await handleMentorBookingSelect(interaction);
+        break;
+    }
+    return;
+  }
+
+  // Modals (forms)
+  if (interaction.isModalSubmit()) {
+    switch (interaction.customId) {
+      case 'plan':
+        await handlePlan(interaction);
+        break;
+    }
+    return;
+  }
+
+});
+
+
+
   function convertToUTC(dateStr, timeStr) {
     const DateTime = require('luxon').DateTime;
 
@@ -156,7 +182,6 @@
     return nzDate.toISO();
   }
 
-  // Get VATSIM ID from Discord ID
   async function getVatsimId(discordId) {
     try {
       const url = `https://api.vatsim.net/v2/members/discord/${discordId}`;
@@ -279,7 +304,6 @@
 
   });
 
-  // TODO Fix i to be interaction
   async function handlePlan(i) {
     if (i.isModalSubmit()) {
       await i.deferReply({ ephemeral: true });
