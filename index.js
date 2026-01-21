@@ -50,9 +50,11 @@ const sectorAerodromeMap = {
   "NZCH-T_CTR": ["NZWN", "NZWB", "NZNS"],
   "NZAA_CTR": ["NZAA", "NZWP", "NZHN"],
   "NZCH-B_CTR": ["NZRO", "NZTG", "NZGS"],
+  "NZCH-K_CTR": ["NZCH"],
   "NZOH_CTR": ["NZOH", "NZPM", "NZNR"],
   "NZAA-R_CTR": ["NZHN", "NZNP"],
   "NZWN_APP": ["NZWN", "NZWB"],
+  "NZOH_APP": ["NZOH", "NZPM"],
   "NZAA_APP": ["NZAA", "NZWP"]
 };
 
@@ -1196,44 +1198,5 @@ await interaction.followUp({
       });
 
   };
-
-  const oneHour = 60 * 60 * 1000;
-
-  setInterval(async () => {
-    const now = new Date();
-    const currentYear = now.getFullYear();
-
-    for (const userId of messages.keys()) {
-      const userBookings = messages.get(userId);
-
-      if (!Array.isArray(userBookings)) continue;
-
-      const updatedBookings = [];
-
-      for (const booking of userBookings) {
-        const [day, month] = booking.date.split('/').map(Number);
-        const endHour = Math.floor(booking.end / 100);
-        const endMinute = booking.end % 100;
-
-        const bookingEnd = new Date(currentYear, month - 1, day, endHour, endMinute);
-
-        if (bookingEnd > now) {
-          updatedBookings.push(booking);
-        } else {
-          try {
-            const channel = client.channels.cache.get(process.env.CHANNEL_ID);
-            const msg = await channel.messages.fetch(booking.messageId);
-            await msg.delete();
-          } catch (err) {
-            console.warn(`⚠️ Could not delete expired booking message ${booking.messageId}`);
-          }
-        }
-      }
-
-      messages.set(userId, updatedBookings);
-    }
-
-  }, oneHour);
-
   return s4d
 })();
