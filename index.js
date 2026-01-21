@@ -5,7 +5,8 @@
   const event = new Database('./event.json')
   const messages = new Database("./messages.json");
   const eventclose = new Database('./eventclose.json')
-
+  const cheerio = require('cheerio');
+  const { DateTime } = require('luxon');
   const axios = require('axios');
   const events = require('events');
   const { exec } = require("child_process");
@@ -25,7 +26,7 @@
   } = require("discord.js");
   const fs = require('fs');
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
+  const trafficCache = new Map();
   const syncCommands = require('discord-sync-commands');
 
   let s4d = {
@@ -43,6 +44,110 @@
       if (!client.readyTimestamp) throw new Error('You cannot perform message operations while the bot is not connected to the Discord API')
     }
   };
+
+const sectorAerodromeMap = {
+  "NZCH-S_CTR": ["NZQN", "NZDN", "NZNV"],
+  "NZCH-T_CTR": ["NZWN", "NZWB", "NZNS"],
+  "NZAA_CTR": ["NZAA", "NZWP", "NZHN"],
+  "NZCH-B_CTR": ["NZRO", "NZTG", "NZGS"],
+  "NZOH_CTR": ["NZOH", "NZPM", "NZNR"],
+  "NZAA-R_CTR": ["NZHN", "NZNP"],
+  "NZWN_APP": ["NZWN", "NZWB"],
+  "NZAA_APP": ["NZAA", "NZWP"]
+};
+
+const sectorCodeMap = {
+  "NZAA_CTR": "OCR",
+  "NZCH-B_CTR": "BAY",
+  "NZOH_CTR": "OHA",
+  "NZCH-K_CTR": "KAI",
+  "NZCH-T_CTR": "NAK",
+  "NZCH-S_CTR": "STH",
+  "NZAA-R_CTR": "RAN"
+};
+
+function resolveAerodromes(position) {
+  if (sectorAerodromeMap[position]) return sectorAerodromeMap[position];
+  const match = position.match(/^([A-Z]{4})_(APP|TWR|GND|DEL)$/);
+  if (match) return [match[1]];
+  return [];
+}
+
+function getPreviousWeekNZ(dateStr) {
+  const [day, month] = dateStr.split('/').map(Number);
+  const year = DateTime.now().setZone('Pacific/Auckland').year;
+  const nzDate = DateTime.fromObject({ year, month, day }, { zone: 'Pacific/Auckland' });
+  return nzDate.minus({ weeks: 1 }).toFormat('yyyy-MM-dd');
+}
+
+async function getTrafficData(icao, date) {
+  const key = `${icao}_${date}`;
+  if (trafficCache.has(key)) return trafficCache.get(key);
+
+  const url = `https://statsim.net/events/custom/?airports=${icao}&period=custom&from=${date}+00:00&to=${date}+23:00`;
+  const { data: html } = await axios.get(url);
+  const $ = cheerio.load(html);
+  const text = $('body').text();
+
+  const arrivals = parseInt(text.match(/Arrivals:\s*(\d+)/)?.[1] || 0);
+  const departures = parseInt(text.match(/Departures:\s*(\d+)/)?.[1] || 0);
+  const result = { icao, arrivals, departures };
+
+  trafficCache.set(key, result);
+  return result;
+}
+
+async function getSectorTraffic(sector, date) {
+  const aerodromes = sectorAerodromeMap[sector] || [];
+
+  const promises = aerodromes.map(icao =>
+    getTrafficData(icao, date).catch(() => ({ arrivals: 0, departures: 0 }))
+  );
+
+  const results = await Promise.all(promises);
+
+  let arrivals = 0;
+  let departures = 0;
+
+  for (const r of results) {
+    arrivals += r.arrivals;
+    departures += r.departures;
+  }
+
+  return {
+    sectorCode: sectorCodeMap[sector] || sector,
+    arrivals,
+    departures,
+    total: arrivals + departures
+  };
+}
+
+async function formatAerodromeTraffic(position, date) {
+  const aerodromes = resolveAerodromes(position);
+
+  const promises = aerodromes.map(icao =>
+    getTrafficData(icao, date).catch(() => ({ icao, arrivals: 0, departures: 0 }))
+  );
+
+  const results = await Promise.all(promises);
+
+  let out = `📊 **Expected Traffic (based on ${date})**\n`;
+
+  for (const r of results) {
+    out += `• **${r.icao}** — ${r.arrivals} arrivals / ${r.departures} departures\n`;
+  }
+
+  return out;
+}
+
+async function formatSectorTraffic(sectors, date) {
+  let out = `📊 **Expected Traffic (based on ${date})**\n`;
+  for (const sector of sectors) {
+    const t = await getSectorTraffic(sector, date);
+    out += `• **${t.sectorCode}** — ${t.total} movements (${t.arrivals} arrivals / ${t.departures} departures)\n`;
+  }
+  return out;
+}
 
   const { Client, GatewayIntentBits, Partials } = require('discord.js');
 
@@ -325,15 +430,6 @@
         "NZCH-S_CTR": ["NZCH-K_CTR"]
       };
 
-      const sectorCodeMap = {
-        "NZAA_CTR": "OCR",
-        "NZCH-B_CTR": "BAY",
-        "NZOH_CTR": "OHA",
-        "NZCH-K_CTR": "KAI",
-        "NZCH-T_CTR": "NAK",
-        "NZCH-S_CTR": "STH"
-      };
-
       const fssPositions = ['NTTT_FSS', 'NZCM_FSS', 'NZZO-TSN_FSS', 'NZZO_FSS', 'NZZO-E_FSS'];
       const fssRoleId = '1424849958074454146';
 
@@ -581,71 +677,79 @@
       });
       messages.set(userId, userBookings);
 
-      if (isCTR) {
-        const allExtendable = [
-          'NZCH-B_CTR', 'NZOH_CTR', 'NZCH-K_CTR',
-          'NZCH-S_CTR', 'NZCH-T_CTR', 'NZAA_CTR'
-        ];
+      const prevDate = getPreviousWeekNZ(date);
 
-        const unavailable = new Set();
-        for (const entry of rawDB) {
-          const bookings = entry.data;
-          if (!Array.isArray(bookings)) continue;
+if (isCTR) {
+  const allExtendable = [
+    'NZCH-B_CTR', 'NZOH_CTR', 'NZCH-K_CTR',
+    'NZCH-S_CTR', 'NZCH-T_CTR', 'NZAA_CTR'
+  ];
 
-          for (const b of bookings) {
-            if (b.date !== date) continue;
-            const bStart = parseInt(b.start);
-            const bEnd = parseInt(b.end);
-            const timeOverlap = !(end <= bStart || start >= bEnd);
-            if (!timeOverlap) continue;
+  const unavailable = new Set();
+  for (const entry of rawDB) {
+    const bookings = entry.data;
+    if (!Array.isArray(bookings)) continue;
 
-            unavailable.add(b.position);
-            if (Array.isArray(b.extendedSectors)) {
-              for (const ext of b.extendedSectors) {
-                unavailable.add(ext);
-              }
-            }
-          }
+    for (const b of bookings) {
+      if (b.date !== date) continue;
+      const bStart = parseInt(b.start);
+      const bEnd = parseInt(b.end);
+      const timeOverlap = !(end <= bStart || start >= bEnd);
+      if (!timeOverlap) continue;
+
+      unavailable.add(b.position);
+      if (Array.isArray(b.extendedSectors)) {
+        for (const ext of b.extendedSectors) {
+          unavailable.add(ext);
         }
-
-        const availableSectors = allExtendable.filter(sector =>
-          sector !== pos &&
-          !extendedSectors.includes(sector) &&
-          !unavailable.has(sector)
-        );
-
-        if (availableSectors.length === 0) {
-          await i.editReply({
-            content: '✅ Booking Created. No additional sectors available for extension.',
-            ephemeral: true
-          });
-        } else {
-          const options = availableSectors.map(sector => ({
-            label: sector,
-            value: `${sentMessage.id}|${sector}`
-          }));
-          const { EmbedBuilder, ActionRowBuilder, SelectMenuBuilder } = require('discord.js');
-          const row = new ActionRowBuilder().addComponents(
-            new SelectMenuBuilder()
-              .setCustomId('extend_sector_select')
-              .setPlaceholder('Select sectors to extend into')
-              .setMinValues(0)
-              .setMaxValues(options.length)
-              .addOptions(options)
-          );
-
-          await i.editReply({
-            content: '✅ Booking Created. Select sectors you want to extend into:',
-            components: [row],
-            ephemeral: true
-          });
-        }
-      } else {
-        await i.editReply({
-          content: '✅ Booking Created. To delete, run /deletebooking with the same position and date.',
-          ephemeral: true
-        });
       }
+    }
+  }
+
+  const availableSectors = allExtendable.filter(sector =>
+    sector !== pos &&
+    !extendedSectors.includes(sector) &&
+    !unavailable.has(sector)
+  );
+
+  if (availableSectors.length === 0) {
+    await i.editReply({
+      content: '✅ Booking Created. No additional sectors available for extension.',
+      ephemeral: true
+    });
+
+    const traffic = await formatSectorTraffic([pos], prevDate);
+    await i.followUp({ content: traffic, ephemeral: true });
+  } else {
+    const options = availableSectors.map(sector => ({
+      label: sector,
+      value: `${sentMessage.id}|${sector}`
+    }));
+    const { ActionRowBuilder, SelectMenuBuilder } = require('discord.js');
+    const row = new ActionRowBuilder().addComponents(
+      new SelectMenuBuilder()
+        .setCustomId('extend_sector_select')
+        .setPlaceholder('Select sectors to extend into')
+        .setMinValues(0)
+        .setMaxValues(options.length)
+        .addOptions(options)
+    );
+
+    await i.editReply({
+      content: '✅ Booking Created. Select sectors you want to extend into:',
+      components: [row],
+      ephemeral: true
+    });
+  }
+} else {
+  await i.editReply({
+    content: '✅ Booking Created. To delete, run /deletebooking with the same position and date.',
+    ephemeral: true
+  });
+
+  const traffic = await formatAerodromeTraffic(pos, prevDate);
+  await i.followUp({ content: traffic, ephemeral: true });
+}
 
     } else {
 
@@ -964,12 +1068,20 @@
         messages.set(userId, userBookings);
       }
 
-      if (interaction.replied || interaction.deferred) {
-        await interaction.editReply({ content: '✅ Extended sectors updated.', components: [] });
-      } else {
-        await interaction.reply({ content: '✅ Extended sectors updated.', components: [], ephemeral: true });
-      }
+ if (interaction.replied || interaction.deferred) {
+  await interaction.editReply({ content: '✅ Extended sectors updated.', components: [] });
+} else {
+  await interaction.reply({ content: '✅ Extended sectors updated.', components: [], ephemeral: true });
+}
 
+const prevDate = getPreviousWeekNZ(booking.date);
+const allSectors = [booking.position, ...booking.extendedSectors];
+const traffic = await formatSectorTraffic(allSectors, prevDate);
+
+await interaction.followUp({
+  content: traffic,
+  ephemeral: true
+});
 
     } catch (err) {
       console.error('❌ Error in extend_sector_select handler:', err);
