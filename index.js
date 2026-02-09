@@ -373,19 +373,16 @@ async function formatSectorTraffic(sectors, date) {
   };
 
   client.on('ready', async () => {
-    event.set(String('NZZO-E_FSS'), '0/0');
-    event.set(String('NZAA-R_CTR'), '0/0');
-    event.set(String('NZCH-D_CTR'), '0/0');
-    event.set(String('NZAA_DEP'), '0/0');
-    event.set(String('NZCH_DEP'), '0/0');
-    event.set(String('NZWN_DEP'), '0/0');
-    event.set(String('NSTU_TWR'), '0/0');
-    event.set(String('NZMF_TWR'), '0/0');
-    event.set(String('NZPP_TWR'), '0/0');
-    event.set(String('NZFX_GND'), '0/0');
-    event.set(String('NZQN_GND'), '0/0');
-    event.set(String('NCRG_DEL'), '0/0');
-    event.set(String('NZFX_DEL'), '0/0');
+    const managedEventPositions = [
+      'NZZO-E_FSS', 'NZAA-R_CTR', 'NZCH-D_CTR', 'NZAA_DEP', 'NZCH_DEP',
+      'NZWN_DEP', 'NSTU_TWR', 'NZMF_TWR', 'NZPP_TWR', 'NZFX_GND',
+      'NZQN_GND', 'NCRG_DEL', 'NZFX_DEL'
+    ];
+    for (const position of managedEventPositions) {
+      if (event.get(position) === undefined) {
+        event.set(position, '0/0');
+      }
+    }
     var plan_embed = new Discord.EmbedBuilder();
     plan_embed.setColor('#000000');
     plan_embed.setTitle(String('Book A Controlling Session'))
@@ -445,8 +442,8 @@ async function formatSectorTraffic(sectors, date) {
         '1427191337458864158': 'I1 - Instructor'
       };
 
-      if (posRaw !== pos) return i.reply({ content: '❌ Position must be in ALL CAPS.', ephemeral: true });
-      if (isNaN(start) || isNaN(end)) return i.reply({ content: '❌ Start and End times must be valid numbers.', ephemeral: true });
+      if (posRaw !== pos) return i.editReply({ content: '❌ Position must be in ALL CAPS.', ephemeral: true });
+      if (isNaN(start) || isNaN(end)) return i.editReply({ content: '❌ Start and End times must be valid numbers.', ephemeral: true });
 
       const callsignRegex = /^(?:[A-Z]{4}_[A-Z]{3}|NZCH-[A-Z]_CTR)$/;
       if (!callsignRegex.test(pos)) {
@@ -507,16 +504,12 @@ async function formatSectorTraffic(sectors, date) {
         return;
       }
 
-      const eventKeys = Object.keys(event.all()).reduce((acc, key) => {
-        acc[key.toUpperCase()] = event.get(key);
-        return acc;
-      }, {});
-      const unlockedDate = eventKeys[pos];
-      if (unlockedDate && unlockedDate !== date) {
+      const unlockedDate = event.get(pos);
+      if (unlockedDate && unlockedDate !== '0/0' && unlockedDate !== date) {
         return i.editReply({ content: `❌ This position is locked. It is only unlocked for ${unlockedDate}.`, ephemeral: true });
       }
 
-      if (fssPositions.includes(pos) && !member._roles.includes(fssRoleId)) {
+      if (fssPositions.includes(pos) && !member.roles.cache.has(fssRoleId)) {
         return i.editReply({ content: '❌ You do not have the Oceanic Endorsement required to book this FSS position.', ephemeral: true });
       }
 
@@ -657,7 +650,7 @@ async function formatSectorTraffic(sectors, date) {
       }
 
       for (const [roleId, label] of Object.entries(roleMap)) {
-        if (member._roles.includes(roleId)) {
+        if (member.roles.cache.has(roleId)) {
           bookingEmbed.setFooter({ text: label });
           break;
         }
@@ -745,7 +738,7 @@ if (isCTR) {
   }
 } else {
   await i.editReply({
-    content: '✅ Booking Created. To delete, run /deletebooking with the same position and date.',
+    content: '✅ Booking Created. To delete, run /deletebookings with the same position and date.',
     ephemeral: true
   });
 
@@ -929,8 +922,15 @@ if (isCTR) {
     const sorted = userBookings.sort((a, b) => {
       const [dayA, monthA] = a.date.split('/').map(Number);
       const [dayB, monthB] = b.date.split('/').map(Number);
-      const dateA = new Date(2025, monthA - 1, dayA, a.start);
-      const dateB = new Date(2025, monthB - 1, dayB, b.start);
+      const currentYear = new Date().getFullYear();
+      const startA = String(a.start).padStart(4, '0');
+      const startB = String(b.start).padStart(4, '0');
+      const hourA = parseInt(startA.slice(0, 2), 10);
+      const minuteA = parseInt(startA.slice(2), 10);
+      const hourB = parseInt(startB.slice(0, 2), 10);
+      const minuteB = parseInt(startB.slice(2), 10);
+      const dateA = new Date(currentYear, monthA - 1, dayA, hourA, minuteA);
+      const dateB = new Date(currentYear, monthB - 1, dayB, hourB, minuteB);
       return dateA - dateB;
     });
 
@@ -1163,8 +1163,6 @@ await interaction.followUp({
 
   async function handleMentor(interaction) {
       const { ActionRowBuilder, SelectMenuBuilder } = require('discord.js');
-      const Database = require("easy-json-database");
-      const messages = new Database("./messages.json");
 
       const userId = String(interaction.member.user.id);
       const mentor = interaction.options.getMember('mentor');
