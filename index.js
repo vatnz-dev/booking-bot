@@ -166,13 +166,46 @@ function hhmmToClock(hhmm) {
   return `${raw.slice(0, 2)}:${raw.slice(2)}`;
 }
 
+function buildUtcWindowFromNz(date, start = '0000', end = '2359') {
+  const [year, month, day] = String(date).split('-').map(Number);
+  const startRaw = String(start).padStart(4, '0');
+  const endRaw = String(end).padStart(4, '0');
+
+  const startHour = Number(startRaw.slice(0, 2));
+  const startMinute = Number(startRaw.slice(2));
+  const endHour = Number(endRaw.slice(0, 2));
+  const endMinute = Number(endRaw.slice(2));
+
+  const fromNz = DateTime.fromObject(
+    { year, month, day, hour: startHour, minute: startMinute },
+    { zone: 'Pacific/Auckland' }
+  );
+  const toNz = DateTime.fromObject(
+    { year, month, day, hour: endHour, minute: endMinute },
+    { zone: 'Pacific/Auckland' }
+  );
+
+  if (!fromNz.isValid || !toNz.isValid) {
+    return null;
+  }
+
+  return {
+    fromUtc: fromNz.toUTC().toFormat("yyyy-MM-dd'T'HH:mm"),
+    toUtc: toNz.toUTC().toFormat("yyyy-MM-dd'T'HH:mm")
+  };
+}
+
 async function getTrafficData(icao, date, start = '0000', end = '2359') {
-  const from = `${date}T${hhmmToClock(start)}`;
-  const to = `${date}T${hhmmToClock(end)}`;
-  const key = `${icao}_${from}_${to}`;
+  const utcWindow = buildUtcWindowFromNz(date, start, end);
+  if (!utcWindow) {
+    return { icao, arrivals: 0, departures: 0 };
+  }
+
+  const { fromUtc, toUtc } = utcWindow;
+  const key = `${icao}_${fromUtc}_${toUtc}`;
   if (trafficCache.has(key)) return trafficCache.get(key);
 
-  const url = `https://statsim.net/events/custom/${encodeURIComponent(from)}/${encodeURIComponent(to)}/${icao}`;
+  const url = `https://statsim.net/events/custom/${encodeURIComponent(fromUtc)}/${encodeURIComponent(toUtc)}/${icao}`;
   const { data: html } = await axios.get(url);
   const $ = cheerio.load(html);
   const text = $('body').text();
