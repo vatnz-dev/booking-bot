@@ -5,9 +5,11 @@
   const event = new Database('./event.json')
   const messages = new Database("./messages.json");
   const eventclose = new Database('./eventclose.json')
+  const eventThreads = new Database('./eventthreads.json')
   const cheerio = require('cheerio');
   const { DateTime } = require('luxon');
   const axios = require('axios');
+  const dns = require('dns');
   const events = require('events');
   const { exec } = require("child_process");
   const Discord = require("discord.js");
@@ -22,15 +24,26 @@
     StringSelectMenuBuilder,
     PermissionFlagsBits,
     ActivityType,
-    ButtonStyle
+    ButtonStyle,
+    ChannelType
   } = require("discord.js");
   const fs = require('fs');
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  dns.setDefaultResultOrder?.('ipv4first');
   const trafficCache = new Map();
   const syncCommands = require('discord-sync-commands');
   const mentorTagTimeouts = new Map();
   const mentorApprovalTimeouts = new Map();
   const extensionSelectionTimeouts = new Map();
+  const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
+  const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
+  const EVENT_CALENDAR_URL = process.env.EVENT_CALENDAR_URL || 'https://www.vatnz.net/events/calendar/vatnz-lite.ics';
+  const EVENT_LOOKAHEAD_DAYS = 7;
+  const ONE_HOUR_MS = 60 * 60 * 1000;
+  const MENTOR_TAG_TIMEOUT_MS = 5 * 60 * 1000;
+  const MENTOR_APPROVAL_TIMEOUT_MS = 30 * 60 * 1000;
+  let eventThreadCheckInterval = null;
+  let bookingCleanupInterval = null;
 
   const ratingRoleIds = {
     S1: '1424663440638611536',
@@ -58,6 +71,740 @@
       if (!client.readyTimestamp) throw new Error('You cannot perform message operations while the bot is not connected to the Discord API')
     }
   };
+
+  function isStaffMember(member) {
+    return Boolean(member?.roles?.cache?.has(STAFF_ROLE_ID));
+  }
+
+  function cleanEmbedValue(value, fallback = 'N/A') {
+    const text = value === undefined || value === null || value === '' ? fallback : String(value);
+    return text.length > 1024 ? `${text.slice(0, 1021)}...` : text;
+  }
+
+  function summarizeError(err) {
+    if (!err) return 'Unknown error';
+    const code = err.code || err.cause?.code;
+    const status = err.response?.status ? `HTTP ${err.response.status}` : null;
+    const url = err.config?.url;
+    const message = err.message || err.cause?.message || String(err);
+    return [code, status, message, url].filter(Boolean).join(' - ');
+  }
+
+  async function fetchDiscordChannel(channelId, label = 'channel') {
+    if (!channelId) return null;
+    try {
+      return client.channels.cache.get(channelId) || await client.channels.fetch(channelId);
+    } catch (err) {
+      console.warn(`Could not fetch ${label} ${channelId}:`, err?.message || err);
+      return null;
+    }
+  }
+
+  async function getBookingChannel() {
+    return fetchDiscordChannel(process.env.CHANNEL_ID, 'booking channel');
+  }
+
+  async function getLogChannel() {
+    return fetchDiscordChannel(LOG_CHANNEL_ID, 'log channel');
+  }
+
+  async function fetchBookingMessage(booking) {
+    const preferredChannelId = booking?.channelId || process.env.CHANNEL_ID;
+    const preferredChannel = await fetchDiscordChannel(preferredChannelId, 'booking message channel');
+    if (preferredChannel?.messages && booking?.messageId) {
+      try {
+        return await preferredChannel.messages.fetch(booking.messageId);
+      } catch (err) {
+        console.warn(`Could not fetch booking message ${booking.messageId} from ${preferredChannelId}:`, err?.message || err);
+      }
+    }
+
+    if (preferredChannelId !== process.env.CHANNEL_ID) {
+      const fallbackChannel = await getBookingChannel();
+      if (fallbackChannel?.messages && booking?.messageId) {
+        try {
+          return await fallbackChannel.messages.fetch(booking.messageId);
+        } catch (err) {
+          console.warn(`Could not fetch booking message ${booking.messageId} from fallback channel:`, err?.message || err);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function getGuildIdForLinks(booking) {
+    return booking?.guildId || client.guilds.cache.first()?.id || '@me';
+  }
+
+  function getBookingMessageLink(booking) {
+    if (!booking?.messageId) return null;
+    const channelId = booking.channelId || process.env.CHANNEL_ID;
+    return `https://discord.com/channels/${getGuildIdForLinks(booking)}/${channelId}/${booking.messageId}`;
+  }
+
+  function formatAuditUser(userId, fallback = 'System') {
+    return userId ? `<@${userId}> (${userId})` : fallback;
+  }
+
+  function addAuditField(fields, name, value, inline = false) {
+    if (value === undefined || value === null || value === '') return;
+    fields.push({ name, value: cleanEmbedValue(value), inline });
+  }
+
+  async function sendAuditLog({ action, actorId = null, actorLabel = null, targetUserId = null, booking = null, reason = null, fields = [], color = '#2F3136' }) {
+    const logChannel = await getLogChannel();
+    if (!logChannel?.send) return;
+
+    const embedFields = [];
+    addAuditField(embedFields, 'Actor', actorLabel || formatAuditUser(actorId), true);
+    if (targetUserId) addAuditField(embedFields, 'Controller', formatAuditUser(targetUserId), true);
+    if (reason) addAuditField(embedFields, 'Reason', reason, false);
+
+    if (booking) {
+      addAuditField(embedFields, 'Position', booking.position, true);
+      addAuditField(embedFields, 'Date', booking.date, true);
+      addAuditField(embedFields, 'Time', `${String(booking.start).padStart(4, '0')}-${String(booking.end).padStart(4, '0')}`, true);
+      addAuditField(embedFields, 'Channel', `<#${booking.channelId || process.env.CHANNEL_ID}>`, true);
+      if (booking.threadId) addAuditField(embedFields, 'Thread', `<#${booking.threadId}>`, true);
+      const link = getBookingMessageLink(booking);
+      if (link) addAuditField(embedFields, 'Message', `[Open message](${link})`, false);
+    }
+
+    for (const field of fields) {
+      addAuditField(embedFields, field.name, field.value, field.inline);
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor(color)
+      .setTitle(action)
+      .addFields(embedFields)
+      .setTimestamp();
+
+    try {
+      await logChannel.send({ embeds: [embed] });
+    } catch (err) {
+      console.warn('Could not send audit log:', err?.message || err);
+    }
+  }
+
+  function parseDdMm(dateStr) {
+    if (!/^\d{2}\/\d{2}$/.test(String(dateStr))) return null;
+    const [day, month] = String(dateStr).split('/').map(Number);
+    if (month < 1 || month > 12) return null;
+    const check = DateTime.fromObject({ year: DateTime.now().setZone('Pacific/Auckland').year, month, day }, { zone: 'Pacific/Auckland' });
+    if (!check.isValid) return null;
+    return { day, month };
+  }
+
+  function parseHhmm(time) {
+    const raw = String(time).padStart(4, '0');
+    if (!/^\d{4}$/.test(raw)) return null;
+    const hour = Number(raw.slice(0, 2));
+    const minute = Number(raw.slice(2));
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return { raw, hour, minute };
+  }
+
+  function buildNzDateTime(dateStr, timeStr, year) {
+    const date = parseDdMm(dateStr);
+    const time = parseHhmm(timeStr);
+    if (!date || !time) return null;
+
+    const value = DateTime.fromObject(
+      { year, month: date.month, day: date.day, hour: time.hour, minute: time.minute },
+      { zone: 'Pacific/Auckland' }
+    );
+
+    return value.isValid ? value : null;
+  }
+
+  function getBookingIntervalNz(booking, year) {
+    const startNz = buildNzDateTime(booking?.date, booking?.start, year);
+    const endNz = buildNzDateTime(booking?.date, booking?.end, year);
+    if (!startNz || !endNz) return null;
+    return { startNz, endNz };
+  }
+
+  function getEventDateTimes(eventData) {
+    const startUtc = DateTime.fromISO(eventData?.startUtcISO || eventData?.start, { zone: 'utc' });
+    const endUtc = DateTime.fromISO(eventData?.endUtcISO || eventData?.end, { zone: 'utc' });
+    if (!startUtc.isValid || !endUtc.isValid) return null;
+    return {
+      startUtc,
+      endUtc,
+      startNz: startUtc.setZone('Pacific/Auckland'),
+      endNz: endUtc.setZone('Pacific/Auckland')
+    };
+  }
+
+  function bookingOverlapsEvent(booking, eventData) {
+    const eventTimes = getEventDateTimes(eventData);
+    if (!eventTimes) return false;
+    const bookingTimes = getBookingIntervalNz(booking, eventTimes.startNz.year);
+    if (!bookingTimes) return false;
+    return bookingTimes.startNz < eventTimes.endNz && bookingTimes.endNz > eventTimes.startNz;
+  }
+
+  function unfoldIcsLines(text) {
+    const lines = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    const unfolded = [];
+    for (const line of lines) {
+      if (/^[ \t]/.test(line) && unfolded.length > 0) {
+        unfolded[unfolded.length - 1] += line.slice(1);
+      } else {
+        unfolded.push(line);
+      }
+    }
+    return unfolded;
+  }
+
+  function unescapeIcsValue(value) {
+    return String(value || '')
+      .replace(/\\n/gi, '\n')
+      .replace(/\\,/g, ',')
+      .replace(/\\;/g, ';')
+      .replace(/\\\\/g, '\\')
+      .trim();
+  }
+
+  function parseIcsDate(value) {
+    const raw = String(value || '').trim();
+    if (/^\d{8}T\d{6}Z$/.test(raw)) {
+      return DateTime.fromFormat(raw, "yyyyMMdd'T'HHmmss'Z'", { zone: 'utc' });
+    }
+    if (/^\d{8}T\d{6}$/.test(raw)) {
+      return DateTime.fromFormat(raw, "yyyyMMdd'T'HHmmss", { zone: 'utc' });
+    }
+    if (/^\d{8}$/.test(raw)) {
+      return DateTime.fromFormat(raw, 'yyyyMMdd', { zone: 'Pacific/Auckland' }).toUTC();
+    }
+    return DateTime.fromISO(raw, { zone: 'utc' });
+  }
+
+  function parseVatnzIcsEvents(icsText) {
+    const eventsOut = [];
+    let current = null;
+
+    for (const line of unfoldIcsLines(icsText)) {
+      if (line === 'BEGIN:VEVENT') {
+        current = {};
+        continue;
+      }
+      if (line === 'END:VEVENT') {
+        if (current?.uid && current?.title && current?.startUtc?.isValid && current?.endUtc?.isValid) {
+          eventsOut.push({
+            uid: current.uid,
+            title: current.title,
+            startUtcISO: current.startUtc.toUTC().toISO(),
+            endUtcISO: current.endUtc.toUTC().toISO(),
+            url: current.url,
+            categories: current.categories || []
+          });
+        }
+        current = null;
+        continue;
+      }
+      if (!current) continue;
+
+      const splitAt = line.indexOf(':');
+      if (splitAt === -1) continue;
+
+      const rawKey = line.slice(0, splitAt);
+      const prop = rawKey.split(';')[0].toUpperCase();
+      const value = unescapeIcsValue(line.slice(splitAt + 1));
+
+      if (prop === 'UID') current.uid = value;
+      if (prop === 'SUMMARY') current.title = value;
+      if (prop === 'DTSTART') current.startUtc = parseIcsDate(value);
+      if (prop === 'DTEND') current.endUtc = parseIcsDate(value);
+      if (prop === 'ATTACH' || prop === 'URL') {
+        current.url = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+      }
+      if (prop === 'CATEGORIES') current.categories = value.split(',').map(v => v.trim()).filter(Boolean);
+    }
+
+    return eventsOut;
+  }
+
+  async function fetchVatnzEvents() {
+    const { data } = await axios.get(EVENT_CALENDAR_URL, { timeout: 15000 });
+    return parseVatnzIcsEvents(data);
+  }
+
+  function compactEventState(eventData) {
+    return {
+      uid: eventData.uid,
+      title: eventData.title,
+      startUtcISO: eventData.startUtcISO,
+      endUtcISO: eventData.endUtcISO,
+      url: eventData.url,
+      categories: eventData.categories || []
+    };
+  }
+
+  function eventStateKey(uid) {
+    return Buffer.from(String(uid || 'unknown')).toString('base64url');
+  }
+
+  function getEventThreadState(uid) {
+    return eventThreads.get(eventStateKey(uid));
+  }
+
+  function setEventThreadState(uid, state) {
+    eventThreads.set(eventStateKey(uid), state);
+  }
+
+  function formatEventWindow(eventData) {
+    const eventTimes = getEventDateTimes(eventData);
+    if (!eventTimes) return 'Unknown time';
+    const sameDay = eventTimes.startNz.hasSame(eventTimes.endNz, 'day');
+    if (sameDay) {
+      return `${eventTimes.startNz.toFormat('dd LLL yyyy HH:mm')} ${eventTimes.startNz.offsetNameShort}-${eventTimes.endNz.toFormat('HH:mm')} ${eventTimes.endNz.offsetNameShort}`;
+    }
+    return `${eventTimes.startNz.toFormat('dd LLL yyyy HH:mm')} ${eventTimes.startNz.offsetNameShort} to ${eventTimes.endNz.toFormat('dd LLL yyyy HH:mm')} ${eventTimes.endNz.offsetNameShort}`;
+  }
+
+  function isEventWithinThreadWindow(eventData) {
+    const eventTimes = getEventDateTimes(eventData);
+    if (!eventTimes) return false;
+    const nowNz = DateTime.now().setZone('Pacific/Auckland');
+    return eventTimes.endNz > nowNz && eventTimes.startNz <= nowNz.plus({ days: EVENT_LOOKAHEAD_DAYS });
+  }
+
+  function isChristchurchControlEvent(eventData) {
+    // This is intentionally based on the VATNZ event title, not NZCH bookings or positions.
+    const normalized = String(eventData?.title || '')
+      .toLowerCase()
+      .replace(/chrsitchurch/g, 'christchurch')
+      .replace(/christchruch/g, 'christchurch')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return normalized.includes('christchurch control');
+  }
+
+  function normalizeEventTitleForThreadName(title) {
+    return String(title || 'VATNZ Event')
+      .replace(/chrsitchurch/gi, 'Christchurch')
+      .replace(/christchruch/gi, 'Christchurch')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function ordinalDay(day) {
+    const value = Number(day);
+    const mod100 = value % 100;
+    if (mod100 >= 11 && mod100 <= 13) return `${value}th`;
+    switch (value % 10) {
+      case 1:
+        return `${value}st`;
+      case 2:
+        return `${value}nd`;
+      case 3:
+        return `${value}rd`;
+      default:
+        return `${value}th`;
+    }
+  }
+
+  function buildEventThreadName(eventData) {
+    const eventTimes = getEventDateTimes(eventData);
+    const eventTitle = normalizeEventTitleForThreadName(eventData.title);
+    const suffix = eventTimes ? `${ordinalDay(eventTimes.startNz.day)} ${eventTimes.startNz.toFormat('LLLL')}` : 'event';
+    return `${eventTitle} - ${suffix}`.slice(0, 100);
+  }
+
+  function buildEventEmbed(eventData, title = 'VATNZ Event') {
+    const embed = new EmbedBuilder()
+      .setColor('#0057B8')
+      .setTitle(title)
+      .addFields(
+        { name: 'Event', value: cleanEmbedValue(eventData.title), inline: false },
+        { name: 'Time', value: cleanEmbedValue(formatEventWindow(eventData)), inline: false }
+      )
+      .setTimestamp();
+
+    if (eventData.url) {
+      embed.addFields({ name: 'Link', value: `[Open event](${eventData.url})`, inline: false });
+    }
+    if (Array.isArray(eventData.categories) && eventData.categories.length > 0) {
+      embed.addFields({ name: 'Categories', value: eventData.categories.join(', '), inline: false });
+    }
+    return embed;
+  }
+
+  async function postEventThreadPrompt(eventData) {
+    const existing = getEventThreadState(eventData.uid);
+    if (existing?.status) return;
+
+    const logChannel = await getLogChannel();
+    if (!logChannel?.send) return;
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`event_thread_create:${eventData.uid}`)
+        .setLabel('Create thread')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`event_thread_decline:${eventData.uid}`)
+        .setLabel('Decline')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    const promptMessage = await logChannel.send({
+      content: STAFF_ROLE_ID ? `<@&${STAFF_ROLE_ID}> Event thread check required.` : 'Event thread check required.',
+      embeds: [buildEventEmbed(eventData, 'Create Event Thread?')],
+      components: [row]
+    });
+
+    setEventThreadState(eventData.uid, {
+      status: 'prompted',
+      promptMessageId: promptMessage.id,
+      promptChannelId: logChannel.id,
+      event: compactEventState(eventData),
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  async function updateEventPromptMessage(state, content) {
+    if (!state?.promptMessageId) return;
+    const channel = await fetchDiscordChannel(state.promptChannelId || LOG_CHANNEL_ID, 'event prompt channel');
+    if (!channel?.messages) return;
+
+    try {
+      const promptMessage = await channel.messages.fetch(state.promptMessageId);
+      await promptMessage.edit({ content, components: [] });
+    } catch (err) {
+      console.warn(`Could not update event prompt ${state.promptMessageId}:`, err?.message || err);
+    }
+  }
+
+  function buildBookingEmbedFromRecord(booking, ownerId) {
+    const embed = new EmbedBuilder()
+      .setColor('#000000')
+      .setTitle(booking.position || 'Booking')
+      .addFields(
+        { name: 'Date', value: cleanEmbedValue(booking.date), inline: false },
+        { name: 'Start', value: cleanEmbedValue(String(booking.start)), inline: true },
+        { name: 'End', value: cleanEmbedValue(String(booking.end)), inline: true },
+        { name: 'Controller', value: `<@${ownerId}>`, inline: false }
+      )
+      .setTimestamp();
+
+    if (booking.eventName) embed.addFields({ name: 'Event', value: cleanEmbedValue(booking.eventName), inline: false });
+    if (Array.isArray(booking.extendedSectors) && booking.extendedSectors.length > 0) {
+      embed.addFields({ name: 'Extended Sectors', value: booking.extendedSectors.map(s => sectorCodeMap[s] || s).join(', '), inline: false });
+    }
+    if (booking.mentorId) {
+      embed.addFields({
+        name: 'Mentor',
+        value: booking.mentorApproved ? `<@${booking.mentorId}> Approved` : `<@${booking.mentorId}> (Pending Approval)`,
+        inline: false
+      });
+    }
+    return embed;
+  }
+
+  async function moveBookingsIntoEventThread(eventData, thread) {
+    const moved = [];
+    const rawDB = messages.all();
+
+    for (const entry of rawDB) {
+      const ownerId = entry.key;
+      const bookings = entry.data;
+      if (!Array.isArray(bookings)) continue;
+
+      let changed = false;
+      for (const booking of bookings) {
+        if (!bookingOverlapsEvent(booking, eventData)) continue;
+        if (booking.threadId === thread.id || booking.channelId === thread.id) continue;
+
+        const oldMessageId = booking.messageId;
+        const oldChannelId = booking.channelId || process.env.CHANNEL_ID;
+        const oldMessage = await fetchBookingMessage(booking);
+        const embeds = oldMessage?.embeds?.length
+          ? oldMessage.embeds.map(embed => EmbedBuilder.from(embed))
+          : [buildBookingEmbedFromRecord(booking, ownerId)];
+
+        const newMessage = await thread.send({ embeds });
+        if (booking.mentorRequired && booking.mentorId && !booking.mentorApproved) {
+          await newMessage.react(THUMBS_UP).catch(() => {});
+        }
+
+        if (oldMessage) {
+          await oldMessage.delete().catch(err => {
+            console.warn(`Could not delete moved booking message ${oldMessageId}:`, err?.message || err);
+          });
+        }
+
+        clearMentorTimers(oldMessageId);
+        clearExtensionSelectionTimer(oldMessageId);
+
+        booking.previousMessageIds = [...(booking.previousMessageIds || []), oldMessageId].slice(-5);
+        booking.messageId = newMessage.id;
+        booking.channelId = thread.id;
+        booking.threadId = thread.id;
+        booking.eventUid = eventData.uid;
+        booking.eventName = eventData.title;
+        booking.guildId = thread.guild?.id || booking.guildId;
+        rescheduleMentorTimers(ownerId, booking);
+
+        moved.push({
+          ownerId,
+          oldMessageId,
+          oldChannelId,
+          newMessageId: newMessage.id,
+          position: booking.position,
+          date: booking.date,
+          start: booking.start,
+          end: booking.end
+        });
+        changed = true;
+
+        await sendAuditLog({
+          action: 'Booking Moved To Event Thread',
+          actorLabel: 'System',
+          targetUserId: ownerId,
+          booking,
+          reason: `Matched event ${eventData.title}`,
+          fields: [
+            { name: 'Event Thread', value: `<#${thread.id}>`, inline: true },
+            { name: 'Old Channel', value: `<#${oldChannelId}>`, inline: true },
+            { name: 'Old Message ID', value: oldMessageId, inline: false }
+          ],
+          color: '#0057B8'
+        });
+      }
+
+      if (changed) messages.set(ownerId, bookings);
+    }
+
+    return moved;
+  }
+
+  async function createEventThreadForEvent(eventData, { actorId = null, source = 'auto' } = {}) {
+    const existing = getEventThreadState(eventData.uid);
+    if (existing?.status === 'created' && existing.threadId) {
+      const existingThread = await fetchDiscordChannel(existing.threadId, 'event thread');
+      if (existingThread) return { thread: existingThread, moved: [], alreadyCreated: true };
+    }
+
+    const bookingChannel = await getBookingChannel();
+    if (!bookingChannel?.threads?.create) {
+      throw new Error('Booking channel does not support public threads.');
+    }
+
+    const thread = await bookingChannel.threads.create({
+      name: buildEventThreadName(eventData),
+      autoArchiveDuration: 1440,
+      type: ChannelType.PublicThread,
+      reason: `VATNZ event thread for ${eventData.title}`
+    });
+
+    await thread.send({ embeds: [buildEventEmbed(eventData, 'Event Booking Thread')] });
+
+    const moved = await moveBookingsIntoEventThread(eventData, thread);
+    const updatedState = {
+      ...(existing || {}),
+      status: 'created',
+      threadId: thread.id,
+      threadChannelId: thread.id,
+      parentChannelId: bookingChannel.id,
+      event: compactEventState(eventData),
+      source,
+      createdBy: actorId,
+      createdAt: new Date().toISOString(),
+      movedBookings: moved
+    };
+    setEventThreadState(eventData.uid, updatedState);
+
+    await updateEventPromptMessage(updatedState, `Event thread created: <#${thread.id}>`);
+    await sendAuditLog({
+      action: 'Event Thread Created',
+      actorId,
+      actorLabel: actorId ? null : 'System',
+      reason: source === 'auto' ? 'Automatic Christchurch Control event thread' : 'Created from staff prompt',
+      fields: [
+        { name: 'Event', value: eventData.title, inline: false },
+        { name: 'Time', value: formatEventWindow(eventData), inline: false },
+        { name: 'Thread', value: `<#${thread.id}>`, inline: true },
+        { name: 'Moved Bookings', value: String(moved.length), inline: true }
+      ],
+      color: '#0057B8'
+    });
+
+    return { thread, moved, alreadyCreated: false };
+  }
+
+  async function findMatchingEventThreadForBooking(booking) {
+    const candidates = [];
+    for (const entry of eventThreads.all()) {
+      const state = entry.data;
+      if (state?.status !== 'created' || !state.threadId || !state.event) continue;
+      if (!bookingOverlapsEvent(booking, state.event)) continue;
+      const eventTimes = getEventDateTimes(state.event);
+      candidates.push({ state, start: eventTimes?.startNz?.toMillis() || 0 });
+    }
+
+    candidates.sort((a, b) => a.start - b.start);
+
+    for (const candidate of candidates) {
+      const thread = await fetchDiscordChannel(candidate.state.threadId, 'event thread');
+      if (thread?.send) return { state: candidate.state, thread };
+    }
+
+    return null;
+  }
+
+  async function cleanupFinishedEventThreads() {
+    const nowNz = DateTime.now().setZone('Pacific/Auckland');
+
+    for (const entry of eventThreads.all()) {
+      const uid = entry.key;
+      const state = entry.data;
+      if (!['created', 'delete_failed'].includes(state?.status) || !state.threadId || !state.event) continue;
+
+      const eventTimes = getEventDateTimes(state.event);
+      if (!eventTimes) continue;
+
+      const deleteAfter = eventTimes.endNz.plus({ hours: 1 });
+      if (nowNz < deleteAfter) continue;
+
+      const updatedState = {
+        ...state,
+        status: 'deleted',
+        deletedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      let deleted = false;
+      const thread = await fetchDiscordChannel(state.threadId, 'finished event thread');
+      if (thread?.delete) {
+        try {
+          await thread.delete(`VATNZ event finished more than 1 hour ago: ${state.event.title}`);
+          deleted = true;
+        } catch (err) {
+          console.warn(`Could not delete finished event thread ${state.threadId}:`, err?.message || err);
+          updatedState.status = 'delete_failed';
+          updatedState.deleteError = err?.message || String(err);
+        }
+      } else {
+        updatedState.deleteNote = 'Thread was not found; treating it as already deleted.';
+        deleted = true;
+      }
+
+      eventThreads.set(uid, updatedState);
+
+      await sendAuditLog({
+        action: deleted ? 'Event Thread Deleted' : 'Event Thread Delete Failed',
+        actorLabel: 'System',
+        reason: deleted ? 'Event ended more than 1 hour ago' : 'Discord thread deletion failed',
+        fields: [
+          { name: 'Event', value: state.event.title, inline: false },
+          { name: 'Time', value: formatEventWindow(state.event), inline: false },
+          { name: 'Thread ID', value: state.threadId, inline: true },
+          { name: 'Delete After', value: deleteAfter.toFormat('dd LLL yyyy HH:mm ZZZZ'), inline: true }
+        ],
+        color: deleted ? '#D9534F' : '#FF9900'
+      });
+    }
+  }
+
+  async function handleEventThreadButton(interaction) {
+    if (!isStaffMember(interaction.member)) {
+      await interaction.reply({ content: 'You do not have permission to manage event threads.', ephemeral: true });
+      return;
+    }
+
+    const createPrefix = 'event_thread_create:';
+    const declinePrefix = 'event_thread_decline:';
+    const isCreate = interaction.customId.startsWith(createPrefix);
+    const isDecline = interaction.customId.startsWith(declinePrefix);
+    const uid = isCreate
+      ? interaction.customId.slice(createPrefix.length)
+      : interaction.customId.slice(declinePrefix.length);
+    const state = getEventThreadState(uid);
+    const eventData = state?.event;
+
+    if (!eventData || (!isCreate && !isDecline)) {
+      await interaction.reply({ content: 'Could not find that event prompt.', ephemeral: true });
+      return;
+    }
+
+    if (isCreate) {
+      await interaction.deferReply({ ephemeral: true });
+      try {
+        const result = await createEventThreadForEvent(eventData, { actorId: interaction.user.id, source: 'staff' });
+        await interaction.editReply({ content: `Event thread ready: <#${result.thread.id}>.` });
+      } catch (err) {
+        console.error('Could not create event thread:', err);
+        await interaction.editReply({ content: 'Could not create the event thread. Check bot permissions and channel access.' });
+      }
+      return;
+    }
+
+    const updatedState = {
+      ...state,
+      status: 'declined',
+      declinedBy: interaction.user.id,
+      declinedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    setEventThreadState(uid, updatedState);
+    await interaction.message.edit({ components: [] }).catch(() => {});
+    await interaction.reply({ content: `Declined event thread for ${eventData.title}.`, ephemeral: true });
+    await sendAuditLog({
+      action: 'Event Thread Declined',
+      actorId: interaction.user.id,
+      fields: [
+        { name: 'Event', value: eventData.title, inline: false },
+        { name: 'Time', value: formatEventWindow(eventData), inline: false }
+      ],
+      color: '#666666'
+    });
+  }
+
+  async function checkVatnzEventThreads() {
+    await cleanupFinishedEventThreads();
+
+    const eventsFromFeed = await fetchVatnzEvents();
+    const upcoming = eventsFromFeed
+      .filter(isEventWithinThreadWindow)
+      .sort((a, b) => (getEventDateTimes(a)?.startNz?.toMillis() || 0) - (getEventDateTimes(b)?.startNz?.toMillis() || 0));
+
+    for (const eventData of upcoming) {
+      const existing = getEventThreadState(eventData.uid);
+      if (existing?.status === 'created' && existing.threadId) {
+        setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
+        const thread = await fetchDiscordChannel(existing.threadId, 'event thread');
+        if (thread) await moveBookingsIntoEventThread(eventData, thread);
+        continue;
+      }
+
+      if (isChristchurchControlEvent(eventData)) {
+        if (existing?.status !== 'created') {
+          await createEventThreadForEvent(eventData, { source: 'auto' });
+        }
+        continue;
+      }
+
+      if (existing?.status === 'declined') continue;
+      if (existing?.status === 'prompted') {
+        setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
+        continue;
+      }
+
+      await postEventThreadPrompt(eventData);
+    }
+  }
+
+  function startEventThreadScheduler() {
+    if (eventThreadCheckInterval) return;
+    checkVatnzEventThreads().catch(err => console.warn(`Event thread check failed: ${summarizeError(err)}`));
+    eventThreadCheckInterval = setInterval(() => {
+      checkVatnzEventThreads().catch(err => console.warn(`Event thread check failed: ${summarizeError(err)}`));
+    }, ONE_HOUR_MS);
+  }
 
 const sectorAerodromeMap = {
   "NZCH-S_CTR": ["NZQN", "NZDN", "NZNV"],
@@ -282,8 +1029,10 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
     partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User]
   });
 
-  client.once('ready', () => {
+  client.once('clientReady', () => {
     console.log(`${client.user.tag} is alive!`);
+    startBookingCleanupScheduler();
+    startEventThreadScheduler();
   });
 
   client.login(process.env.DISCORD_TOKEN);
@@ -293,40 +1042,95 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
   });
 
   async function handleDeleteBookings(interaction) {
-    const { ActionRowBuilder, SelectMenuBuilder } = require('discord.js');
-
     const userId = String(interaction.member.user.id);
-    const userBookings = messages.get(userId);
+    const requestedController = interaction.options.getUser('controller');
+    const staff = isStaffMember(interaction.member);
 
-    if (!Array.isArray(userBookings) || userBookings.length === 0) {
+    if (requestedController && requestedController.id !== userId && !staff) {
       await interaction.reply({
-        content: '📭 You have no current bookings.',
+        content: 'You can only delete your own bookings.',
         ephemeral: true
       });
       return;
     }
 
-    const options = userBookings.map((b, index) => ({
+    const targetUserId = requestedController ? requestedController.id : userId;
+    const userBookings = messages.get(targetUserId);
+
+    if (!Array.isArray(userBookings) || userBookings.length === 0) {
+      await interaction.reply({
+        content: targetUserId === userId ? '📭 You have no current bookings.' : `📭 <@${targetUserId}> has no current bookings.`,
+        ephemeral: true
+      });
+      return;
+    }
+
+    const options = userBookings.slice(0, 25).map((b, index) => ({
       label: `${b.position} on ${b.date} at ${b.start}`,
       description: `Ends at ${b.end}`,
-      value: String(index)
+      value: `${targetUserId}|${index}`
     }));
 
     const row = new ActionRowBuilder().addComponents(
-      new SelectMenuBuilder()
+      new StringSelectMenuBuilder()
         .setCustomId('delete_booking_select')
         .setPlaceholder('Select a booking to delete')
         .addOptions(options)
     );
 
     await interaction.reply({
-      content: '🗑️ Select a booking to delete:',
+      content: targetUserId === userId ? '🗑️ Select a booking to delete:' : `🗑️ Select a booking to delete for <@${targetUserId}>:`,
       components: [row],
       ephemeral: true
     });
   }
 
+  async function handleExpectedTraffic(interaction) {
+    await interaction.deferReply({ ephemeral: true });
+
+    const position = interaction.options.getString('position').trim().toUpperCase();
+    const date = interaction.options.getString('date').trim();
+    const start = parseHhmm(interaction.options.getString('start'));
+    const end = parseHhmm(interaction.options.getString('end'));
+
+    if (!parseDdMm(date)) {
+      await interaction.editReply({ content: 'Date must be in DD/MM format.' });
+      return;
+    }
+    if (!start || !end) {
+      await interaction.editReply({ content: 'Start and end must be valid 24-hour HHMM times.' });
+      return;
+    }
+    if (Number(start.raw) >= Number(end.raw)) {
+      await interaction.editReply({ content: 'Start time must be before end time.' });
+      return;
+    }
+
+    const isCtr = position.endsWith('_CTR');
+    const supportedAerodromes = resolveAerodromes(position);
+    if (!isCtr && supportedAerodromes.length === 0) {
+      await interaction.editReply({ content: `No aerodrome mapping found for ${position}.` });
+      return;
+    }
+    if (isCtr && !sectorAerodromeMap[position]) {
+      await interaction.editReply({ content: `No sector mapping found for ${position}.` });
+      return;
+    }
+
+    const previousWeekDate = getPreviousWeekNZ(date, start.raw);
+    try {
+      const traffic = isCtr
+        ? await formatSectorTraffic([position], previousWeekDate, start.raw, end.raw)
+        : await formatAerodromeTraffic(position, previousWeekDate, start.raw, end.raw);
+      await interaction.editReply({ content: traffic });
+    } catch (err) {
+      console.error('Expected traffic lookup failed:', err);
+      await interaction.editReply({ content: 'Could not fetch expected traffic right now. Please try again later.' });
+    }
+  }
+
   client.on('interactionCreate', async (interaction) => {
+    try {
 
   // Slash commands
   if (interaction.isChatInputCommand()) {
@@ -336,6 +1140,9 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
         break;
       case 'deletebookings':
         await handleDeleteBookings(interaction);
+        break;
+      case 'expectedtraffic':
+        await handleExpectedTraffic(interaction);
         break;
       case 'mentor':
         await handleMentor(interaction);
@@ -352,6 +1159,11 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
 
   // Buttons
   if (interaction.isButton()) {
+    if (interaction.customId.startsWith('event_thread_')) {
+      await handleEventThreadButton(interaction);
+      return;
+    }
+
     switch (interaction.customId) {
       case 'plan':
         await handlePlan(interaction);
@@ -386,6 +1198,19 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
     return;
   }
 
+    } catch (err) {
+      console.error('Interaction handler failed:', err);
+      try {
+        const payload = { content: 'Something went wrong while handling that interaction. Please try again.', components: [], ephemeral: true };
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply(payload);
+        } else {
+          await interaction.reply(payload);
+        }
+      } catch (replyErr) {
+        console.warn('Could not send interaction error response:', replyErr?.message || replyErr);
+      }
+    }
 });
 
   function clearMentorTimers(messageId) {
@@ -455,18 +1280,19 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
     extensionSelectionTimeouts.set(messageId, timeout);
   }
 
-  async function removeBookingAndNotify({ ownerId, messageId, dmText }) {
+  async function removeBookingAndNotify({ ownerId, messageId, dmText, auditAction = 'Booking Auto-Deleted', auditReason = 'Automatic deletion' }) {
     const entry = findBookingByMessageId(messageId);
     if (!entry) return;
 
+    const removedBooking = { ...entry.booking };
     entry.bookings.splice(entry.index, 1);
     messages.set(entry.ownerId, entry.bookings);
     clearMentorTimers(messageId);
+    clearExtensionSelectionTimer(messageId);
 
     try {
-      const channel = client.channels.cache.get(process.env.CHANNEL_ID);
-      const msg = await channel.messages.fetch(messageId);
-      await msg.delete();
+      const msg = await fetchBookingMessage(removedBooking);
+      if (msg) await msg.delete();
     } catch (err) {
       console.warn(`⚠️ Could not auto-delete booking message ${messageId}:`, err?.message || err);
     }
@@ -479,9 +1305,18 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
         console.warn(`⚠️ Could not DM user ${ownerId} about auto-deletion:`, err?.message || err);
       }
     }
+
+    await sendAuditLog({
+      action: auditAction,
+      actorLabel: 'System',
+      targetUserId: entry.ownerId,
+      booking: removedBooking,
+      reason: auditReason,
+      color: '#D9534F'
+    });
   }
 
-  function scheduleMentorTagTimeout(ownerId, messageId) {
+  function scheduleMentorTagTimeout(ownerId, messageId, delayMs = MENTOR_TAG_TIMEOUT_MS) {
     clearMentorTimers(messageId);
     const timeout = setTimeout(async () => {
       const entry = findBookingByMessageId(messageId);
@@ -490,13 +1325,15 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
       await removeBookingAndNotify({
         ownerId,
         messageId,
-        dmText: 'Your booking was auto-deleted because you did not tag a mentor within 5 minutes. Please rebook and tag your mentor promptly.'
+        dmText: 'Your booking was auto-deleted because you did not tag a mentor within 5 minutes. Please rebook and tag your mentor promptly.',
+        auditAction: 'Mentor Tag Timeout Auto-Delete',
+        auditReason: 'Controller did not tag a mentor within 5 minutes'
       });
-    }, 5 * 60 * 1000);
+    }, Math.max(1000, delayMs));
     mentorTagTimeouts.set(messageId, timeout);
   }
 
-  function scheduleMentorApprovalTimeout(ownerId, messageId) {
+  function scheduleMentorApprovalTimeout(ownerId, messageId, delayMs = MENTOR_APPROVAL_TIMEOUT_MS) {
     const existing = mentorApprovalTimeouts.get(messageId);
     if (existing) clearTimeout(existing);
 
@@ -507,10 +1344,29 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
       await removeBookingAndNotify({
         ownerId,
         messageId,
-        dmText: `Your booking was auto-deleted because your mentor did not approve with a ${THUMBS_UP} within 30 minutes. Please rebook and get your mentor to approve.`
+        dmText: `Your booking was auto-deleted because your mentor did not approve with a ${THUMBS_UP} within 30 minutes. Please rebook and get your mentor to approve.`,
+        auditAction: 'Mentor Approval Timeout Auto-Delete',
+        auditReason: 'Mentor did not approve within 30 minutes'
       });
-    }, 30 * 60 * 1000);
+    }, Math.max(1000, delayMs));
     mentorApprovalTimeouts.set(messageId, timeout);
+  }
+
+  function remainingFromTimestamp(timestamp, timeoutMs) {
+    const created = DateTime.fromISO(timestamp || '');
+    if (!created.isValid) return timeoutMs;
+    return created.plus({ milliseconds: timeoutMs }).diffNow().milliseconds;
+  }
+
+  function rescheduleMentorTimers(ownerId, booking) {
+    if (!booking?.mentorRequired || booking.mentorApproved) return;
+
+    if (!booking.mentorId) {
+      scheduleMentorTagTimeout(ownerId, booking.messageId, remainingFromTimestamp(booking.createdAt, MENTOR_TAG_TIMEOUT_MS));
+      return;
+    }
+
+    scheduleMentorApprovalTimeout(ownerId, booking.messageId, remainingFromTimestamp(booking.mentorTaggedAt, MENTOR_APPROVAL_TIMEOUT_MS));
   }
 
   client.on('messageReactionAdd', async (reaction, user) => {
@@ -537,8 +1393,8 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
         mentorApprovalTimeouts.delete(messageId);
       }
 
-      const channel = client.channels.cache.get(process.env.CHANNEL_ID);
-      const msg = await channel.messages.fetch(messageId);
+      const msg = await fetchBookingMessage(booking);
+      if (!msg) return;
       const embed = msg.embeds[0];
       const newEmbed = new EmbedBuilder()
         .setColor(embed.color)
@@ -555,6 +1411,14 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
       newEmbed.addFields({ name: 'Mentor', value: `<@${booking.mentorId}> ✅ Approved`, inline: false });
       await msg.edit({ embeds: [newEmbed] });
       await msg.reactions.removeAll().catch(() => {});
+      await sendAuditLog({
+        action: 'Mentor Approved Booking',
+        actorId: user.id,
+        targetUserId: entry.ownerId,
+        booking,
+        reason: 'Mentor reacted with approval',
+        color: '#3BA55D'
+      });
     } catch (err) {
       console.warn('⚠️ Failed to process mentor approval reaction:', err?.message || err);
     }
@@ -620,9 +1484,24 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
   }
   */
   async function handleDeleteBookingSelect(interaction) {
-    const selectedIndex = parseInt(interaction.values[0]);
     const userId = String(interaction.member.user.id);
-    const userBookings = messages.get(userId);
+    const [targetUserFromValue, selectedIndexFromValue] = String(interaction.values[0]).includes('|')
+      ? interaction.values[0].split('|')
+      : [userId, interaction.values[0]];
+    const selectedIndex = parseInt(selectedIndexFromValue, 10);
+    const targetUserId = String(targetUserFromValue);
+    const staff = isStaffMember(interaction.member);
+
+    if (targetUserId !== userId && !staff) {
+      await interaction.update({
+        content: 'You can only delete your own bookings.',
+        components: [],
+        ephemeral: true
+      });
+      return;
+    }
+
+    const userBookings = messages.get(targetUserId);
 
     if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
       await interaction.update({
@@ -646,25 +1525,37 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
     */
 
     userBookings.splice(selectedIndex, 1);
-    messages.set(userId, userBookings);
+    messages.set(targetUserId, userBookings);
+    clearMentorTimers(booking.messageId);
+    clearExtensionSelectionTimer(booking.messageId);
 
 
     try {
-      const channel = interaction.channel;
-      const messageToDelete = await channel.messages.fetch(booking.messageId);
-      await messageToDelete.delete();
+      const messageToDelete = await fetchBookingMessage(booking);
+      if (messageToDelete) await messageToDelete.delete();
     } catch (err) {
       console.error(`⚠️ Could not delete message ${booking.messageId}:`, err);
     }
 
+    await sendAuditLog({
+      action: targetUserId === userId ? 'Booking Deleted' : 'Staff Deleted Booking',
+      actorId: userId,
+      targetUserId,
+      booking,
+      reason: targetUserId === userId ? 'Controller deleted their own booking' : 'Staff deleted another controller booking',
+      color: targetUserId === userId ? '#D9534F' : '#FF9900'
+    });
+
     await interaction.update({
-      content: `✅ Booking for ${booking.position} on ${booking.date} at ${booking.start} has been deleted.`,
+      content: targetUserId === userId
+        ? `✅ Booking for ${booking.position} on ${booking.date} at ${booking.start} has been deleted.`
+        : `✅ Booking for ${booking.position} on ${booking.date} at ${booking.start} has been deleted for <@${targetUserId}>.`,
       components: [],
       ephemeral: true
     });
   };
 
-  client.on('ready', async () => {
+  client.on('clientReady', async () => {
     const managedEventPositions = [
       'NZZO-E_FSS', 'NZAA-R_CTR', 'NZCH-D_CTR', 'NZAA_DEP', 'NZCH_DEP',
       'NZWN_DEP', 'NSTU_TWR', 'NZMF_TWR', 'NZPP_TWR', 'NZFX_GND',
@@ -692,11 +1583,14 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
       }
     );
     let plan = new ButtonBuilder()
-    plan.setCustomId('plan'); plan.setStyle(ButtonStyle.Secondary); plan.setLabel('Book Controlling Session'); client.channels.cache.get(process.env.CHANNEL_ID).send({
-      content: String(' '),
-      components: [new ActionRowBuilder().addComponents(plan)],
-      embeds: [plan_embed]
-    });
+    const bookingChannel = await getBookingChannel();
+    if (bookingChannel?.send) {
+      plan.setCustomId('plan'); plan.setStyle(ButtonStyle.Secondary); plan.setLabel('Book Controlling Session'); bookingChannel.send({
+        content: String(' '),
+        components: [new ActionRowBuilder().addComponents(plan)],
+        embeds: [plan_embed]
+      });
+    }
 
   });
 
@@ -851,8 +1745,8 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
 
           if (removedSectors.length > 0) {
             try {
-              const channel = client.channels.cache.get(process.env.CHANNEL_ID);
-              const msg = await channel.messages.fetch(b.messageId);
+              const msg = await fetchBookingMessage(b);
+              if (!msg) throw new Error('Booking message not found');
               const embed = msg.embeds[0];
               const newEmbed = new EmbedBuilder()
                 .setColor(embed.color)
@@ -939,8 +1833,11 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
         )
         .setThumbnail(member.user.displayAvatarURL({ format: "png" }));
 
-      if (eventName) {
-        bookingEmbed.addFields({ name: 'Event', value: eventName, inline: false });
+      const matchingEventThread = await findMatchingEventThreadForBooking({ position: pos, date, start, end });
+      const matchedEventName = matchingEventThread?.state?.event?.title || null;
+
+      if (eventName || matchedEventName) {
+        bookingEmbed.addFields({ name: 'Event', value: eventName || matchedEventName, inline: false });
       }
       if (extendedSectors.length > 0) {
         const display = extendedSectors.map(s => sectorCodeMap[s] || s);
@@ -954,26 +1851,46 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
         }
       }
 
-      const channel = client.channels.cache.get(process.env.CHANNEL_ID);
+      const channel = matchingEventThread?.thread || await getBookingChannel();
+      if (!channel?.send) {
+        return i.editReply({ content: '❌ Could not find the booking channel. Check CHANNEL_ID.', ephemeral: true });
+      }
       const sentMessage = await channel.send({ embeds: [bookingEmbed] });
 
       const existing = messages.get(userId);
       const userBookings = Array.isArray(existing) ? existing : (existing ? [existing] : []);
-      userBookings.push({
+      const createdBooking = {
         position: pos,
         date,
         start,
         end,
         messageId: sentMessage.id,
+        channelId: channel.id,
+        guildId: channel.guild?.id,
+        threadId: matchingEventThread?.thread?.id || null,
+        eventUid: matchingEventThread?.state?.event?.uid || null,
+        eventName: eventName || matchedEventName || null,
         extendedSectors,
         awaitingExtensionSelection: false,
         mentorRequired,
         mentorId: null,
         mentorApproved: false,
+        startUtc: startUTC,
+        endUtc: endUTC,
         createdAt: new Date().toISOString(),
         // bookingvatid
-      });
+      };
+      userBookings.push(createdBooking);
       messages.set(userId, userBookings);
+
+      await sendAuditLog({
+        action: 'Booking Created',
+        actorId: userId,
+        targetUserId: userId,
+        booking: createdBooking,
+        reason: matchingEventThread ? `Routed to event thread: ${matchedEventName}` : 'Controller created a booking',
+        color: '#00AEFF'
+      });
 
       const prevDate = getPreviousWeekNZ(date, String(start).padStart(4, '0'));
       if (mentorRequired) {
@@ -1047,9 +1964,8 @@ if (isCTR) {
       value: `${sentMessage.id}|${sector}`
     }))
     ];
-    const { ActionRowBuilder, SelectMenuBuilder } = require('discord.js');
     const row = new ActionRowBuilder().addComponents(
-      new SelectMenuBuilder()
+      new StringSelectMenuBuilder()
         .setCustomId('extend_sector_select')
         .setPlaceholder('Select sectors to extend into')
         .setMinValues(1)
@@ -1159,7 +2075,45 @@ if (isCTR) {
     },
     {
       name: 'deletebookings',
-      description: 'Delete your controller bookings.'
+      description: 'Delete your controller bookings.',
+      options: [
+        {
+          type: 6,
+          name: 'controller',
+          description: 'Staff only: delete another controller booking.',
+          required: false
+        }
+      ]
+    },
+    {
+      name: 'expectedtraffic',
+      description: 'Check expected traffic using previous-week StatSim data.',
+      options: [
+        {
+          type: 3,
+          name: 'position',
+          description: 'Position, e.g. NZCH_APP',
+          required: true
+        },
+        {
+          type: 3,
+          name: 'date',
+          description: 'NZ date in DD/MM format',
+          required: true
+        },
+        {
+          type: 3,
+          name: 'start',
+          description: 'Start time in HHMM format',
+          required: true
+        },
+        {
+          type: 3,
+          name: 'end',
+          description: 'End time in HHMM format',
+          required: true
+        }
+      ]
     },
     {
       name: 'openeventposition',
@@ -1302,10 +2256,24 @@ if (isCTR) {
       ]
     };
 
-    const channel = client.channels.cache.get(process.env.CHANNEL_ID);
+    const channel = await getBookingChannel();
+    if (!channel?.send) {
+      await interaction.reply({ content: 'Booking channel not found.', ephemeral: true });
+      return;
+    }
     const sentMessage = await channel.send({ embeds: [embed] });
 
     eventclose.set(position, sentMessage.id);
+    await sendAuditLog({
+      action: 'Event Position Opened',
+      actorId: interaction.user.id,
+      fields: [
+        { name: 'Position', value: position, inline: true },
+        { name: 'Date', value: date, inline: true },
+        { name: 'Message', value: `[Open message](https://discord.com/channels/${sentMessage.guild?.id || client.guilds.cache.first()?.id}/${channel.id}/${sentMessage.id})`, inline: false }
+      ],
+      color: '#00AEFF'
+    });
 
     await interaction.reply({
       content: `${position} opened!`,
@@ -1335,7 +2303,7 @@ if (isCTR) {
       }
 
       const [messageId] = selections[0].split('|');
-      const booking = userBookings.find(b => b.messageId === messageId);
+      const booking = userBookings.find(b => b.messageId === messageId || (Array.isArray(b.previousMessageIds) && b.previousMessageIds.includes(messageId)));
       if (!booking) {
         return;
       }
@@ -1398,8 +2366,8 @@ if (isCTR) {
       }
 
       if (updated) {
-        const channel = client.channels.cache.get(process.env.CHANNEL_ID);
-        const msg = await channel.messages.fetch(messageId);
+        const msg = await fetchBookingMessage(booking);
+        if (!msg) throw new Error('Booking message not found');
         const embed = msg.embeds[0];
         const newEmbed = new Discord.EmbedBuilder()
           .setColor(embed.color)
@@ -1464,10 +2432,24 @@ await interaction.followUp({
 
   async function handleCloseEventPosition(interaction) {
     event.set(String((interaction.options.getString('position'))), '0/0');
-    client.channels.cache.get(process.env.CHANNEL_ID).messages.fetch(eventclose.get(String((interaction.options.getString('position'))))).then(async (s4dmessage) => {
-      (s4dmessage).delete()
-      await interaction.reply({ content: (String(interaction.options.getString('position')) + ' closed!'), ephemeral: true, components: [] });
-
+    const bookingChannel = await getBookingChannel();
+    const closeMessageId = eventclose.get(String((interaction.options.getString('position'))));
+    if (bookingChannel?.messages && closeMessageId) {
+      try {
+        const s4dmessage = await bookingChannel.messages.fetch(closeMessageId);
+        await s4dmessage.delete();
+      } catch (err) {
+        console.warn(`Could not delete event close message ${closeMessageId}:`, err?.message || err);
+      }
+    }
+    await interaction.reply({ content: (String(interaction.options.getString('position')) + ' closed!'), ephemeral: true, components: [] });
+    await sendAuditLog({
+      action: 'Event Position Closed',
+      actorId: interaction.user.id,
+      fields: [
+        { name: 'Position', value: String(interaction.options.getString('position')), inline: true }
+      ],
+      color: '#D9534F'
     });
 
   };  async function handleMentorBookingSelect(interaction) {
@@ -1488,12 +2470,13 @@ await interaction.followUp({
 
     let messageLink = '';
     try {
-      const channel = client.channels.cache.get(process.env.CHANNEL_ID);
-      const s4dmessage = await channel.messages.fetch(booking.messageId);
+      const s4dmessage = await fetchBookingMessage(booking);
+      if (!s4dmessage) throw new Error('Booking message not found');
       await s4dmessage.react(THUMBS_UP);
 
-      const guildId = client.guilds.cache.get('1424636974312198187').id;
-      messageLink = `https://discord.com/channels/${guildId}/${channel.id}/${booking.messageId}`;
+      const channelId = booking.channelId || process.env.CHANNEL_ID;
+      const guildId = booking.guildId || s4dmessage.guild?.id || client.guilds.cache.first()?.id;
+      messageLink = `https://discord.com/channels/${guildId}/${channelId}/${booking.messageId}`;
 
       const embed = s4dmessage.embeds[0];
       if (embed) {
@@ -1525,6 +2508,14 @@ await interaction.followUp({
     booking.mentorApproved = false;
     booking.mentorTaggedAt = new Date().toISOString();
     messages.set(userId, userBookings);
+    await sendAuditLog({
+      action: 'Mentor Tagged Booking',
+      actorId: userId,
+      targetUserId: userId,
+      booking,
+      reason: `Mentor tagged: <@${mentorId}>`,
+      color: '#5865F2'
+    });
 
     const tagTimer = mentorTagTimeouts.get(booking.messageId);
     if (tagTimer) {
@@ -1536,7 +2527,7 @@ await interaction.followUp({
     }
 
     try {
-      const guild = client.guilds.cache.get('1424636974312198187');
+      const guild = interaction.guild || client.guilds.cache.first();
       const mentorMember = guild.members.cache.get(mentorId) || await guild.members.fetch(mentorId);
 
       await mentorMember.send({
@@ -1564,8 +2555,6 @@ await interaction.followUp({
 
 
   async function handleMentor(interaction) {
-      const { ActionRowBuilder, SelectMenuBuilder } = require('discord.js');
-
       const userId = String(interaction.member.user.id);
       const mentor = interaction.options.getMember('mentor');
       const userBookings = messages.get(userId);
@@ -1585,7 +2574,7 @@ await interaction.followUp({
       }));
 
       const row = new ActionRowBuilder().addComponents(
-        new SelectMenuBuilder()
+        new StringSelectMenuBuilder()
           .setCustomId('mentor_booking_select')
           .setPlaceholder(`Select a booking to notify ${mentor.user.username}`)
           .addOptions(options)
@@ -1598,5 +2587,71 @@ await interaction.followUp({
       });
 
   };
+
+  function getBookingEndForCleanup(booking) {
+    if (booking?.endUtc) {
+      const fromStoredUtc = DateTime.fromISO(booking.endUtc, { zone: 'utc' }).setZone('Pacific/Auckland');
+      if (fromStoredUtc.isValid) return fromStoredUtc;
+    }
+
+    const nowNz = DateTime.now().setZone('Pacific/Auckland');
+    let endNz = buildNzDateTime(booking?.date, booking?.end, nowNz.year);
+    if (!endNz) return null;
+
+    if (endNz < nowNz.minus({ days: 180 })) {
+      endNz = endNz.plus({ years: 1 });
+    }
+
+    return endNz;
+  }
+
+  async function cleanupExpiredBookings() {
+    const nowNz = DateTime.now().setZone('Pacific/Auckland');
+
+    for (const entry of messages.all()) {
+      const ownerId = entry.key;
+      const userBookings = entry.data;
+      if (!Array.isArray(userBookings)) continue;
+
+      const activeBookings = [];
+      for (const booking of userBookings) {
+        const bookingEnd = getBookingEndForCleanup(booking);
+        if (!bookingEnd || bookingEnd > nowNz) {
+          activeBookings.push(booking);
+          continue;
+        }
+
+        clearMentorTimers(booking.messageId);
+        clearExtensionSelectionTimer(booking.messageId);
+
+        try {
+          const msg = await fetchBookingMessage(booking);
+          if (msg) await msg.delete();
+        } catch (err) {
+          console.warn(`Could not delete expired booking message ${booking.messageId}:`, err?.message || err);
+        }
+
+        await sendAuditLog({
+          action: 'Expired Booking Auto-Deleted',
+          actorLabel: 'System',
+          targetUserId: ownerId,
+          booking,
+          reason: 'Booking end time has passed',
+          color: '#D9534F'
+        });
+      }
+
+      messages.set(ownerId, activeBookings);
+    }
+  }
+
+  function startBookingCleanupScheduler() {
+    if (bookingCleanupInterval) return;
+    cleanupExpiredBookings().catch(err => console.warn('Booking cleanup failed:', err?.message || err));
+    bookingCleanupInterval = setInterval(() => {
+      cleanupExpiredBookings().catch(err => console.warn('Booking cleanup failed:', err?.message || err));
+    }, ONE_HOUR_MS);
+  }
+
   return s4d
 })();

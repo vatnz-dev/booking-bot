@@ -1,4 +1,5 @@
 .env
 messages.json
+eventthreads.json
 node_modules
 

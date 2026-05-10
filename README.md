@@ -1,98 +1,106 @@
 # VATNZ ATC Booking Bot
 
-This repository contains the **VATNZ ATC Booking Bot** project. It is designed to streamline controller scheduling, mentoring workflows, and operational coordination across VATNZ. The bot integrates with Discord and provides a structured booking system for ATC sessions.
-
----
+VATNZ ATC Booking Bot is a Discord bot for controller booking, mentoring workflows, expected traffic checks, staff audit logging, and VATNZ event coordination.
 
 ## Features
 
-- **Controller Scheduling**: Book ATC positions directly via Discord  
-- **Mentoring Support**: Enforces endorsement policies and mentoring workflows  
-- **Operational Transparency**: Improves visibility of controller availability and bookings  
-- **Scalable Design**: Built with Node.js and Discord.js v14, with planned MongoDB integration  
-- **Event Management**: Supports VATNZ events and division-wide coordination  
-- **VATSIM Integration**: Integration with the VATSIM Bookings API *(Work in progress)*  
-
----
-
-## Tech Stack
-
-- **Node.js** – Backend runtime  
-- **Discord.js v14** – Discord bot framework  
-- **dotenv** – For environment variables  
-
----
+- Book ATC sessions from Discord with controller rating and mentor checks.
+- View and delete bookings with `/viewbookings` and `/deletebookings`.
+- Staff can use `/deletebookings controller:@user` to delete another controller's booking.
+- Log booking creates, deletes, mentor actions, auto-deletes, event prompts, event thread creation, and event booking moves.
+- Fetch VATNZ events from the official calendar feed and create event threads.
+- Automatically create Christchurch Control event threads based on the event name, including the current VATNZ feed typo `Chrsitchurch Control`.
+- Delete event threads 1 hour after the event ends.
+- Move overlapping bookings into event threads by reposting the booking embed, deleting the original, and updating stored message IDs.
+- Check expected previous-week StatSim traffic with `/expectedtraffic`.
 
 ## Requirements
 
-Before running the bot, ensure you have the following installed:
-
-- **Latest version of Node.js**  
-  Download from [https://nodejs.org](https://nodejs.org)  
-- **npm** (comes bundled with Node.js)
-
----
+- Node.js 20 or newer.
+- npm, which is bundled with Node.js.
+- A Discord bot token.
+- A Discord server where the bot has permission to manage slash commands, send messages, add reactions, create public threads, and delete its own booking/thread messages.
 
 ## Environment Variables
 
-Create a `.env` file in the root of the project (same folder as `index.js`) with the following content:
+Create a `.env` file in the project root, beside `index.js`:
 
 ```env
 DISCORD_TOKEN=your_bot_token_here
-CHANNEL_ID=your_channel_id_here  
+CHANNEL_ID=your_booking_channel_id_here
+LOG_CHANNEL_ID=your_staff_log_channel_id_here
+STAFF_ROLE_ID=your_staff_role_id_here
+EVENT_CALENDAR_URL=https://www.vatnz.net/events/calendar/vatnz-lite.ics
 ```
 
-- `DISCORD_TOKEN` → The bot token from Discord Developer Portal  
-- `CHANNEL_ID` → The ID of the channel where the bot will post messages  
+Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env`. Never commit `.env` or paste real server IDs into this README.
 
-> **Important:** Never commit your `.env` file to GitHub or share it publicly.
+## Local Setup
 
----
-
-## Installation
-
-1. Clone or download this repository.  
-2. Open **Command Prompt (CMD)** or a terminal.  
-3. Navigate to the project folder (the folder containing `index.js` and `package.json`):
-
-```bash
-cd path/to/your/bot-folder
-```
-4. Install the required packages:
+Clone the repository, open a terminal in the project folder, then install dependencies:
 
 ```bash
 npm install
 ```
-This will install all dependencies listed in `package.json`.
 
----
-
-## Launching the Bot
-
-1. Make sure you are in the folder containing:
-   - `index.js`
-   - `package.json`
-   - `.env`
-
-2. Start the bot by running:
+Start the bot:
 
 ```bash
 npm start
 ```
-If configured correctly, the bot will connect to Discord and begin running.
----
 
----
+On Windows PowerShell, if `npm` is blocked by script execution policy, use:
 
-## Notes
+```powershell
+npm.cmd install
+npm.cmd start
+```
 
-- Ensure your **bot token and channel ID** are correctly set in the `.env` file.  
-- Keep **Node.js up to date** to maintain compatibility with Discord.js.  
-- The CMD or terminal window must remain open while the bot is running.  
-- Never share your `.env` file or bot token publicly.  
-- If you make changes to `package.json` or install new packages, run `npm install` again before starting the bot.
+## Commands
 
+- `/viewbookings` - View your current bookings.
+- `/deletebookings` - Delete one of your bookings.
+- `/deletebookings controller:@user` - Staff only; delete another controller's booking.
+- `/mentor mentor:@user` - Tag a mentor for a booking.
+- `/expectedtraffic position:NZCH_APP date:DD/MM start:HHMM end:HHMM` - Show expected previous-week traffic for the same NZ date/time window.
+- `/openeventposition` - Open an event-only position for a date.
+- `/closeeventposition` - Close an event-only position.
 
+## Event Threads
 
+The bot checks the VATNZ calendar feed on startup and hourly.
 
+- Events inside the next 7 days get a staff prompt in the log channel.
+- Christchurch Control events are created automatically by matching the VATNZ event name, not by checking NZCH positions.
+- Other events show Create Thread and Decline buttons for staff.
+- Event threads are public threads under the booking channel.
+- Event thread names use the format `Christchurch Control - 13th May`.
+- Existing overlapping bookings are reposted into the thread, original messages are deleted, and `messages.json` is updated.
+- New overlapping bookings are posted directly into the event thread.
+- Event threads are deleted automatically 1 hour after the event end time.
 
+## Runtime Files
+
+These files are created locally and ignored by git:
+
+- `.env`
+- `messages.json`
+- `eventthreads.json`
+- `node_modules/`
+
+## Test Checklist
+
+1. Run `node --check index.js`.
+2. Install dependencies with `npm install`.
+3. Add a local `.env`.
+4. Start with `npm start`.
+5. In Discord, test:
+   - Normal user creates, views, and deletes their own booking.
+   - Normal user cannot delete another controller's booking.
+   - Staff user deletes another controller's booking and the log channel receives an audit embed.
+   - Mentor-required booking auto-deletes if no mentor is tagged or approval times out.
+   - `/expectedtraffic NZCH_APP DD/MM HHMM HHMM` returns previous-week traffic.
+   - Christchurch Control event auto-creates a thread.
+   - Non-Christchurch event prompt buttons work.
+   - Matching bookings move into the event thread and remain deletable after moving.
+   - Event thread deletes automatically 1 hour after the event ends.
