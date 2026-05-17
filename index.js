@@ -38,12 +38,18 @@
   const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
   const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
   const EVENT_CALENDAR_URL = process.env.EVENT_CALENDAR_URL || 'https://www.vatnz.net/events/calendar/vatnz-lite.ics';
+  const VATNZ_POSITIONS_URL = process.env.VATNZ_POSITIONS_URL || 'https://www.vatnz.net/airspace/positions/';
   const EVENT_LOOKAHEAD_DAYS = 7;
   const ONE_HOUR_MS = 60 * 60 * 1000;
+  const VATNZ_POSITION_CACHE_MS = 12 * ONE_HOUR_MS;
   const MENTOR_TAG_TIMEOUT_MS = 5 * 60 * 1000;
   const MENTOR_APPROVAL_TIMEOUT_MS = 30 * 60 * 1000;
   let eventThreadCheckInterval = null;
   let bookingCleanupInterval = null;
+  let vatnzPositionCache = {
+    fetchedAt: 0,
+    positions: new Map()
+  };
 
   const ratingRoleIds = {
     S1: '1424663440638611536',
@@ -55,6 +61,11 @@
     I1: '1427191337458864158'
   };
   const THUMBS_UP = '\u{1F44D}';
+  const FALLBACK_EVENT_POSITIONS = [
+    'NZZO-E_FSS', 'NZAA-R_CTR', 'NZCH-D_CTR', 'NZAA_DEP', 'NZCH_DEP',
+    'NZWN_DEP', 'NSTU_TWR', 'NZFX_TWR', 'NZMF_TWR', 'NZPP_TWR',
+    'NZFX_GND', 'NZQN_GND', 'NCRG_DEL', 'NZFX_DEL'
+  ];
 
   let s4d = {
     Discord,
@@ -877,6 +888,110 @@ function getPositionType(position) {
   return 'OTHER';
 }
 
+function getBookablePositionSuffix(position) {
+  return String(position || '').match(/_(FSS|CTR|APP|DEP|TWR|GND|DEL)$/)?.[1] || null;
+}
+
+function parseVatnzPositions(html) {
+  const $ = cheerio.load(html);
+  const positions = new Map();
+
+  $('table.positions tr').each((_, row) => {
+    const cells = $(row).find('td');
+    if (cells.length < 4) return;
+
+    const callsign = $(cells[0]).text().trim().toUpperCase();
+    const suffix = getBookablePositionSuffix(callsign);
+    if (!suffix) return;
+
+    const rowClass = $(row).attr('class') || '';
+    positions.set(callsign, {
+      callsign,
+      suffix,
+      isEvent: rowClass.split(/\s+/).includes('position_type_E')
+    });
+  });
+
+  return positions;
+}
+
+async function fetchVatnzPositions({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && vatnzPositionCache.positions.size > 0 && now - vatnzPositionCache.fetchedAt < VATNZ_POSITION_CACHE_MS) {
+    return vatnzPositionCache.positions;
+  }
+
+  try {
+    const { data: html } = await axios.get(VATNZ_POSITIONS_URL, { timeout: 15000 });
+    const positions = parseVatnzPositions(html);
+    if (positions.size === 0) throw new Error('VATNZ position table was empty');
+
+    vatnzPositionCache = {
+      fetchedAt: now,
+      positions
+    };
+  } catch (err) {
+    if (vatnzPositionCache.positions.size > 0) {
+      console.warn(`Using cached VATNZ positions after fetch failed: ${summarizeError(err)}`);
+      return vatnzPositionCache.positions;
+    }
+    throw err;
+  }
+
+  return vatnzPositionCache.positions;
+}
+
+async function validateVatnzPosition(position) {
+  let positions;
+  try {
+    positions = await fetchVatnzPositions();
+  } catch (err) {
+    console.warn(`Could not verify VATNZ position directory: ${summarizeError(err)}`);
+    return {
+      valid: false,
+      reason: 'Could not verify the VATNZ position directory right now. Please try again shortly.'
+    };
+  }
+
+  const meta = positions.get(position);
+  if (!meta) {
+    return {
+      valid: false,
+      reason: `${position} is not a bookable VATNZ position. Please use a callsign from ${VATNZ_POSITIONS_URL}`
+    };
+  }
+
+  return { valid: true, meta };
+}
+
+async function validateVatnzEventPosition(position) {
+  const validation = await validateVatnzPosition(position);
+  if (!validation.valid) return validation;
+
+  if (!validation.meta.isEvent) {
+    return {
+      valid: false,
+      reason: `${position} is a standard VATNZ position, not an event-only position.`
+    };
+  }
+
+  return validation;
+}
+
+async function getVatnzEventPositions() {
+  try {
+    const positions = await fetchVatnzPositions();
+    const eventPositions = [...positions.values()]
+      .filter(position => position.isEvent)
+      .map(position => position.callsign);
+
+    return eventPositions.length > 0 ? eventPositions : FALLBACK_EVENT_POSITIONS;
+  } catch (err) {
+    console.warn(`Could not fetch VATNZ event position list: ${summarizeError(err)}`);
+    return FALLBACK_EVENT_POSITIONS;
+  }
+}
+
 function evaluateBookingEligibility(member, position) {
   const tier = getControllerTier(member);
   const type = getPositionType(position);
@@ -1556,11 +1671,7 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
   };
 
   client.on('clientReady', async () => {
-    const managedEventPositions = [
-      'NZZO-E_FSS', 'NZAA-R_CTR', 'NZCH-D_CTR', 'NZAA_DEP', 'NZCH_DEP',
-      'NZWN_DEP', 'NSTU_TWR', 'NZMF_TWR', 'NZPP_TWR', 'NZFX_GND',
-      'NZQN_GND', 'NCRG_DEL', 'NZFX_DEL'
-    ];
+    const managedEventPositions = await getVatnzEventPositions();
     for (const position of managedEventPositions) {
       if (event.get(position) === undefined) {
         event.set(position, '0/0');
@@ -1569,7 +1680,7 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
     var plan_embed = new Discord.EmbedBuilder();
     plan_embed.setColor('#000000');
     plan_embed.setTitle(String('Book A Controlling Session'))
-    plan_embed.setDescription(String('Controllers may post in this channel indicating that they intend to log onto a specific callsign at a specific time. This channel does not act as a booking system, but merely a heads-up that you intend to log on around that time.'));
+    plan_embed.setDescription(String('This is a booking system for VATNZ controlling sessions. If you book a position, you are expected to be online for that callsign during the booked time. This is still VATSIM, not real life: if plans change, that is fine, but please delete your booking so another controller can use the position.'));
     plan_embed.addFields(
       {
         name: 'Under mentoring?',
@@ -1606,7 +1717,6 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
       const date = i.fields.getTextInputValue('date').trim();
       const start = parseInt(i.fields.getTextInputValue('start').trim());
       const end = parseInt(i.fields.getTextInputValue('end').trim());
-      const eventName = i.fields.getTextInputValue('event');
 
 
       const autoInheritanceMap = {
@@ -1615,7 +1725,6 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
         "NZCH-S_CTR": ["NZCH-K_CTR"]
       };
 
-      const fssPositions = ['NTTT_FSS', 'NZCM_FSS', 'NZZO-TSN_FSS', 'NZZO_FSS', 'NZZO-E_FSS'];
       const fssRoleId = '1424849958074454146';
 
       const roleMap = {
@@ -1630,16 +1739,6 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
 
       if (posRaw !== pos) return i.editReply({ content: '❌ Position must be in ALL CAPS.', ephemeral: true });
       if (isNaN(start) || isNaN(end)) return i.editReply({ content: '❌ Start and End times must be valid numbers.', ephemeral: true });
-
-      const callsignRegex = /^(?:[A-Z]{4}_[A-Z]{3}|NZCH-[A-Z]_CTR)$/;
-      if (!callsignRegex.test(pos)) {
-        await i.editReply({
-          content: '❌ Invalid callsign format. Must be XXXX_XXX or NZCH-X_CTR, no numbers allowed.',
-          ephemeral: true
-        });
-        return;
-      }
-
 
       const dateRaw = i.fields.getTextInputValue('date').trim();
 
@@ -1690,12 +1789,23 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
         return;
       }
 
-      const unlockedDate = event.get(pos);
-      if (unlockedDate && unlockedDate !== '0/0' && unlockedDate !== date) {
-        return i.editReply({ content: `❌ This position is locked. It is only unlocked for ${unlockedDate}.`, ephemeral: true });
+      const positionValidation = await validateVatnzPosition(pos);
+      if (!positionValidation.valid) {
+        return i.editReply({ content: `❌ ${positionValidation.reason}`, ephemeral: true });
+      }
+      const positionMeta = positionValidation.meta;
+
+      if (positionMeta.isEvent) {
+        const unlockedDate = event.get(pos);
+        if (!unlockedDate || unlockedDate === '0/0') {
+          return i.editReply({ content: '❌ This event-only position is not open for bookings right now.', ephemeral: true });
+        }
+        if (unlockedDate !== date) {
+          return i.editReply({ content: `❌ This event-only position is only open for ${unlockedDate}.`, ephemeral: true });
+        }
       }
 
-      if (fssPositions.includes(pos) && !member.roles.cache.has(fssRoleId)) {
+      if (positionMeta.suffix === 'FSS' && !member.roles.cache.has(fssRoleId)) {
         return i.editReply({ content: '❌ You do not have the Oceanic Endorsement required to book this FSS position.', ephemeral: true });
       }
 
@@ -1836,8 +1946,8 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
       const matchingEventThread = await findMatchingEventThreadForBooking({ position: pos, date, start, end });
       const matchedEventName = matchingEventThread?.state?.event?.title || null;
 
-      if (eventName || matchedEventName) {
-        bookingEmbed.addFields({ name: 'Event', value: eventName || matchedEventName, inline: false });
+      if (matchedEventName) {
+        bookingEmbed.addFields({ name: 'Event', value: matchedEventName, inline: false });
       }
       if (extendedSectors.length > 0) {
         const display = extendedSectors.map(s => sectorCodeMap[s] || s);
@@ -1869,7 +1979,7 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
         guildId: channel.guild?.id,
         threadId: matchingEventThread?.thread?.id || null,
         eventUid: matchingEventThread?.state?.event?.uid || null,
-        eventName: eventName || matchedEventName || null,
+        eventName: matchedEventName || null,
         extendedSectors,
         awaitingExtensionSelection: false,
         mentorRequired,
@@ -2050,14 +2160,6 @@ if (isCTR) {
                 .setMinLength(4)
                 .setMaxLength(4)
                 .setRequired(true)
-            ),
-            new ActionRowBuilder().addComponents(
-              new TextInputBuilder()
-                .setCustomId('event')
-                .setLabel('Is This An Event? If So, What Event?')
-                .setStyle(TextInputStyle.Short)
-                .setMaxLength(45)
-                .setRequired(false)
             )
           );
 
@@ -2234,14 +2336,19 @@ if (isCTR) {
   };
   
   async function handleOpenEventPosition(interaction) {
-    const position = interaction.options.getString('position');
+    await interaction.deferReply({ ephemeral: true });
+
+    const position = interaction.options.getString('position').trim().toUpperCase();
     const date = interaction.options.getString('date');
 
     if (!/^\d{2}\/\d{2}$/.test(date)) {
-      await interaction.reply({
-        content: 'Date must be in the format DD/MM (e.g., 06/25). Please correct it.',
-        ephemeral: true
-      });
+      await interaction.editReply({ content: 'Date must be in the format DD/MM (e.g., 25/06). Please correct it.' });
+      return;
+    }
+
+    const positionValidation = await validateVatnzEventPosition(position);
+    if (!positionValidation.valid) {
+      await interaction.editReply({ content: positionValidation.reason });
       return;
     }
 
@@ -2258,7 +2365,7 @@ if (isCTR) {
 
     const channel = await getBookingChannel();
     if (!channel?.send) {
-      await interaction.reply({ content: 'Booking channel not found.', ephemeral: true });
+      await interaction.editReply({ content: 'Booking channel not found.' });
       return;
     }
     const sentMessage = await channel.send({ embeds: [embed] });
@@ -2275,10 +2382,7 @@ if (isCTR) {
       color: '#00AEFF'
     });
 
-    await interaction.reply({
-      content: `${position} opened!`,
-      ephemeral: true
-    });
+    await interaction.editReply({ content: `${position} opened!` });
   };
 
   async function handleExtendSectorSelect(interaction) {
@@ -2431,9 +2535,18 @@ await interaction.followUp({
   };
 
   async function handleCloseEventPosition(interaction) {
-    event.set(String((interaction.options.getString('position'))), '0/0');
+    await interaction.deferReply({ ephemeral: true });
+
+    const position = interaction.options.getString('position').trim().toUpperCase();
+    const positionValidation = await validateVatnzEventPosition(position);
+    if (!positionValidation.valid) {
+      await interaction.editReply({ content: positionValidation.reason });
+      return;
+    }
+
+    event.set(position, '0/0');
     const bookingChannel = await getBookingChannel();
-    const closeMessageId = eventclose.get(String((interaction.options.getString('position'))));
+    const closeMessageId = eventclose.get(position);
     if (bookingChannel?.messages && closeMessageId) {
       try {
         const s4dmessage = await bookingChannel.messages.fetch(closeMessageId);
@@ -2442,12 +2555,12 @@ await interaction.followUp({
         console.warn(`Could not delete event close message ${closeMessageId}:`, err?.message || err);
       }
     }
-    await interaction.reply({ content: (String(interaction.options.getString('position')) + ' closed!'), ephemeral: true, components: [] });
+    await interaction.editReply({ content: `${position} closed!`, components: [] });
     await sendAuditLog({
       action: 'Event Position Closed',
       actorId: interaction.user.id,
       fields: [
-        { name: 'Position', value: String(interaction.options.getString('position')), inline: true }
+        { name: 'Position', value: position, inline: true }
       ],
       color: '#D9534F'
     });

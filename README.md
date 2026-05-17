@@ -31,6 +31,7 @@ CHANNEL_ID=your_booking_channel_id_here
 LOG_CHANNEL_ID=your_staff_log_channel_id_here
 STAFF_ROLE_ID=your_staff_role_id_here
 EVENT_CALENDAR_URL=https://www.vatnz.net/events/calendar/vatnz-lite.ics
+VATNZ_POSITIONS_URL=https://www.vatnz.net/airspace/positions/
 ```
 
 Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env`. Never commit `.env` or paste real server IDs into this README.
