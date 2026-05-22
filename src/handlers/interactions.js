@@ -66,7 +66,7 @@ function createInteractionHandlers({
 
     if (!Array.isArray(userBookings) || userBookings.length === 0) {
       await interaction.reply({
-        content: targetUserId === userId ? 'ðŸ“­ You have no current bookings.' : `ðŸ“­ <@${targetUserId}> has no current bookings.`,
+        content: targetUserId === userId ? '\u{1F4ED} You have no current bookings.' : `\u{1F4ED} <@${targetUserId}> has no current bookings.`,
         ephemeral: true
       });
       return;
@@ -86,7 +86,7 @@ function createInteractionHandlers({
     );
 
     await interaction.reply({
-      content: targetUserId === userId ? 'ðŸ—‘ï¸ Select a booking to delete:' : `ðŸ—‘ï¸ Select a booking to delete for <@${targetUserId}>:`,
+      content: targetUserId === userId ? '\u{1F5D1}\uFE0F Select a booking to delete:' : `\u{1F5D1}\uFE0F Select a booking to delete for <@${targetUserId}>:`,
       components: [row],
       ephemeral: true
     });
@@ -137,6 +137,8 @@ function createInteractionHandlers({
   }
 
   async function handleDeleteBookingSelect(interaction) {
+    await interaction.deferUpdate();
+
     const userId = String(interaction.member.user.id);
     const [targetUserFromValue, selectedIndexFromValue] = String(interaction.values[0]).includes('|')
       ? interaction.values[0].split('|')
@@ -146,10 +148,9 @@ function createInteractionHandlers({
     const staff = isStaffMember(interaction.member);
 
     if (targetUserId !== userId && !staff) {
-      await interaction.update({
+      await interaction.editReply({
         content: 'You can only delete your own bookings.',
-        components: [],
-        ephemeral: true
+        components: []
       });
       return;
     }
@@ -157,10 +158,9 @@ function createInteractionHandlers({
     const userBookings = messages.get(targetUserId);
 
     if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
-      await interaction.update({
-        content: 'âŒ Booking not found.',
-        components: [],
-        ephemeral: true
+      await interaction.editReply({
+        content: '\u274C Booking not found.',
+        components: []
       });
       return;
     }
@@ -176,7 +176,7 @@ function createInteractionHandlers({
       const messageToDelete = await fetchBookingMessage(booking);
       if (messageToDelete) await messageToDelete.delete();
     } catch (err) {
-      console.error(`âš ï¸ Could not delete message ${booking.messageId}:`, err);
+      console.error(`\u26A0\uFE0F Could not delete message ${booking.messageId}:`, err);
     }
 
     await sendAuditLog({
@@ -188,12 +188,11 @@ function createInteractionHandlers({
       color: targetUserId === userId ? '#D9534F' : '#FF9900'
     });
 
-    await interaction.update({
+    await interaction.editReply({
       content: targetUserId === userId
-        ? `âœ… Booking for ${booking.position} on ${booking.date} at ${booking.start} has been deleted.`
-        : `âœ… Booking for ${booking.position} on ${booking.date} at ${booking.start} has been deleted for <@${targetUserId}>.`,
-      components: [],
-      ephemeral: true
+        ? `\u2705 Booking for ${booking.position} on ${booking.date} at ${booking.start} has been deleted.`
+        : `\u2705 Booking for ${booking.position} on ${booking.date} at ${booking.start} has been deleted for <@${targetUserId}>.`,
+      components: []
     });
   }
 
@@ -210,8 +209,8 @@ function createInteractionHandlers({
       const start = parseInt(i.fields.getTextInputValue('start').trim());
       const end = parseInt(i.fields.getTextInputValue('end').trim());
 
-      if (posRaw !== pos) return i.editReply({ content: 'âŒ Position must be in ALL CAPS.', ephemeral: true });
-      if (isNaN(start) || isNaN(end)) return i.editReply({ content: 'âŒ Start and End times must be valid numbers.', ephemeral: true });
+      if (posRaw !== pos) return i.editReply({ content: '\u274C Position must be in ALL CAPS.', ephemeral: true });
+      if (isNaN(start) || isNaN(end)) return i.editReply({ content: '\u274C Start and End times must be valid numbers.', ephemeral: true });
 
       const dateRaw = i.fields.getTextInputValue('date').trim();
       const startRaw = i.fields.getTextInputValue('start').trim();
@@ -226,7 +225,7 @@ function createInteractionHandlers({
 
       if (!isValidTime(startRaw) || !isValidTime(endRaw)) {
         await i.editReply({
-          content: 'âŒ Start and End times must be valid 24-hour times (HHMM).',
+          content: '\u274C Start and End times must be valid 24-hour times (HHMM).',
           ephemeral: true
         });
         return;
@@ -237,7 +236,7 @@ function createInteractionHandlers({
 
       if (starts >= ends) {
         await i.editReply({
-          content: 'âŒ Start time must be before End time.',
+          content: '\u274C Start time must be before End time.',
           ephemeral: true
         });
         return;
@@ -253,7 +252,7 @@ function createInteractionHandlers({
 
       if (!isValidDate(dateRaw)) {
         await i.editReply({
-          content: 'âŒ Date must be valid and in format DD/MM (e.g., 05/12).',
+          content: '\u274C Date must be valid and in format DD/MM (e.g., 05/12).',
           ephemeral: true
         });
         return;
@@ -261,22 +260,22 @@ function createInteractionHandlers({
 
       const positionValidation = await validateVatnzPosition(pos);
       if (!positionValidation.valid) {
-        return i.editReply({ content: `âŒ ${positionValidation.reason}`, ephemeral: true });
+        return i.editReply({ content: `\u274C ${positionValidation.reason}`, ephemeral: true });
       }
       const positionMeta = positionValidation.meta;
 
       if (positionMeta.isEvent) {
         const unlockedDate = event.get(pos);
         if (!unlockedDate || unlockedDate === '0/0') {
-          return i.editReply({ content: 'âŒ This event-only position is not open for bookings right now.', ephemeral: true });
+          return i.editReply({ content: '\u274C This event-only position is not open for bookings right now.', ephemeral: true });
         }
         if (unlockedDate !== date) {
-          return i.editReply({ content: `âŒ This event-only position is only open for ${unlockedDate}.`, ephemeral: true });
+          return i.editReply({ content: `\u274C This event-only position is only open for ${unlockedDate}.`, ephemeral: true });
         }
       }
 
       if (positionMeta.suffix === 'FSS' && !member.roles.cache.has(FSS_ROLE_ID)) {
-        return i.editReply({ content: 'âŒ You do not have the Oceanic Endorsement required to book this FSS position.', ephemeral: true });
+        return i.editReply({ content: '\u274C You do not have the Oceanic Endorsement required to book this FSS position.', ephemeral: true });
       }
 
       const eligibility = evaluateBookingEligibility(member, pos);
@@ -300,7 +299,7 @@ function createInteractionHandlers({
           const bEnd = parseInt(b.end);
           const timeOverlap = !(end <= bStart || start >= bEnd);
           if (timeOverlap) {
-            return i.editReply({ content: 'âŒ This time slot is already booked for that position.', ephemeral: true });
+            return i.editReply({ content: '\u274C This time slot is already booked for that position.', ephemeral: true });
           }
         }
       }
@@ -348,7 +347,7 @@ function createInteractionHandlers({
 
               await msg.edit({ embeds: [newEmbed] });
             } catch (err) {
-              console.warn(`âš ï¸ Could not update embed for booking ${b.messageId}`);
+              console.warn(`\u26A0\uFE0F Could not update embed for booking ${b.messageId}`);
             }
 
             try {
@@ -358,21 +357,21 @@ function createInteractionHandlers({
                 : 'Another controller booked or inherited these sectors.';
 
               await user.send({
-                content: `ðŸ“­ One or more extended sectors were removed from your booking.`,
+                content: `\u{1F4ED} One or more extended sectors were removed from your booking.`,
                 embeds: [
                   new EmbedBuilder()
                     .setColor('#FF0000')
                     .setTitle('Extended Sectors Removed')
                     .setDescription(
                       `The following sectors were removed from your booking on **${b.date}**:\n` +
-                      removedSectors.map(s => `â€¢ ${sectorCodeMap[s] || s}`).join('\n') +
+                      removedSectors.map(s => `\u2022 ${sectorCodeMap[s] || s}`).join('\n') +
                       `\n\nReason: ${reason}`
                     )
                     .setFooter({ text: 'VATNZ Booking System' })
                 ]
               });
             } catch (err) {
-              console.warn(`âš ï¸ Could not DM user ${otherUserId}: ${err}`);
+              console.warn(`\u26A0\uFE0F Could not DM user ${otherUserId}: ${err}`);
             }
 
             messages.set(otherUserId, bookings);
@@ -385,7 +384,7 @@ function createInteractionHandlers({
 
       const vatsimId = await getVatsimId(userId);
       if (!vatsimId) {
-        return i.editReply({ content: 'âŒ Could not retrieve your VATSIM ID. Please ensure your Discord is linked Here: https://community.vatsim.net/', ephemeral: true });
+        return i.editReply({ content: '\u274C Could not retrieve your VATSIM ID. Please ensure your Discord is linked Here: https://community.vatsim.net/', ephemeral: true });
       }
 
       const bookingEmbed = new EmbedBuilder()
@@ -420,7 +419,7 @@ function createInteractionHandlers({
 
       const channel = matchingEventThread?.thread || await getBookingChannel();
       if (!channel?.send) {
-        return i.editReply({ content: 'âŒ Could not find the booking channel. Check CHANNEL_ID.', ephemeral: true });
+        return i.editReply({ content: '\u274C Could not find the booking channel. Check CHANNEL_ID.', ephemeral: true });
       }
       const sentMessage = await channel.send({ embeds: [bookingEmbed] });
 
@@ -561,7 +560,7 @@ function createInteractionHandlers({
 
       if (buttonCooldowns.has(userId) && now - buttonCooldowns.get(userId) < cooldown) {
         return i.reply({
-          content: 'â³ Please wait before clicking again.',
+          content: '\u23F3 Please wait before clicking again.',
           ephemeral: true
         });
       }
@@ -621,7 +620,7 @@ function createInteractionHandlers({
 
     if (!Array.isArray(userBookings) || userBookings.length === 0) {
       await interaction.reply({
-        content: 'ðŸ“­ You have no current bookings.',
+        content: '\u{1F4ED} You have no current bookings.',
         ephemeral: true
       });
       return;
@@ -643,11 +642,11 @@ function createInteractionHandlers({
     });
 
     const embed = new EmbedBuilder()
-      .setTitle('ðŸ“‹ Your Bookings')
+      .setTitle('\u{1F4CB} Your Bookings')
       .setColor('#00AEFF')
       .setDescription(
         sorted.map(b =>
-          `â€¢ **${b.position}** on **${b.date}** from **${b.start}** to **${b.end}**`
+          `\u2022 **${b.position}** on **${b.date}** from **${b.start}** to **${b.end}**`
         ).join('\n')
       )
       .setFooter({ text: 'Use /deletebookings to remove a booking.' });
@@ -707,6 +706,8 @@ function createInteractionHandlers({
 
   async function handleExtendSectorSelect(interaction) {
     try {
+      await interaction.deferUpdate();
+
       const selections = interaction.values;
       const userId = String(interaction.member.user.id);
       const userBookings = messages.get(userId);
@@ -721,11 +722,7 @@ function createInteractionHandlers({
         booking.awaitingExtensionSelection = false;
         messages.set(userId, userBookings);
 
-        if (interaction.replied || interaction.deferred) {
-          await interaction.editReply({ content: 'âœ… No additional sectors selected.', components: [] });
-        } else {
-          await interaction.reply({ content: 'âœ… No additional sectors selected.', components: [], ephemeral: true });
-        }
+        await interaction.editReply({ content: '\u2705 No additional sectors selected.', components: [] });
 
         const prevDate = getPreviousWeekNZ(booking.date, String(booking.start).padStart(4, '0'));
         const traffic = await formatSectorTraffic(
@@ -801,11 +798,7 @@ function createInteractionHandlers({
       booking.awaitingExtensionSelection = false;
       messages.set(userId, userBookings);
 
-      if (interaction.replied || interaction.deferred) {
-        await interaction.editReply({ content: 'âœ… Extended sectors updated.', components: [] });
-      } else {
-        await interaction.reply({ content: 'âœ… Extended sectors updated.', components: [], ephemeral: true });
-      }
+      await interaction.editReply({ content: '\u2705 Extended sectors updated.', components: [] });
 
       const prevDate = getPreviousWeekNZ(booking.date, String(booking.start).padStart(4, '0'));
       const allSectors = [booking.position, ...booking.extendedSectors];
@@ -821,15 +814,15 @@ function createInteractionHandlers({
         ephemeral: true
       });
     } catch (err) {
-      console.error('âŒ Error in extend_sector_select handler:', err);
+      console.error('\u274C Error in extend_sector_select handler:', err);
       try {
         if (interaction.deferred || interaction.replied) {
-          await interaction.editReply({ content: 'âŒ Something went wrong.', components: [] });
+          await interaction.editReply({ content: '\u274C Something went wrong.', components: [] });
         } else {
-          await interaction.reply({ content: 'âŒ Something went wrong.', components: [], ephemeral: true });
+          await interaction.reply({ content: '\u274C Something went wrong.', components: [], ephemeral: true });
         }
       } catch (e) {
-        console.warn('âš ï¸ Failed to send error reply:', e);
+        console.warn('\u26A0\uFE0F Failed to send error reply:', e);
       }
     }
   }
@@ -867,15 +860,16 @@ function createInteractionHandlers({
   }
 
   async function handleMentorBookingSelect(interaction) {
+    await interaction.deferUpdate();
+
     const [selectedIndex, mentorId] = interaction.values[0].split('|');
     const userId = String(interaction.member.user.id);
     const userBookings = messages.get(userId);
 
     if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
-      await interaction.update({
-        content: 'âŒ Booking not found.',
-        components: [],
-        ephemeral: true
+      await interaction.editReply({
+        content: '\u274C Booking not found.',
+        components: []
       });
       return;
     }
@@ -915,7 +909,7 @@ function createInteractionHandlers({
         await s4dmessage.edit({ embeds: [newEmbed] });
       }
     } catch (err) {
-      console.error('âŒ Failed to fetch/update booking message:', err);
+      console.error('\u274C Failed to fetch/update booking message:', err);
     }
 
     booking.mentorId = mentorId;
@@ -951,15 +945,14 @@ function createInteractionHandlers({
         }]
       });
     } catch (err) {
-      console.error('âŒ Failed to DM mentor:', err);
+      console.error('\u274C Failed to DM mentor:', err);
     }
 
-    await interaction.update({
+    await interaction.editReply({
       content: booking.mentorRequired
-        ? `âœ… Booking for ${booking.position} on ${booking.date} at ${booking.start} has been sent to your mentor. They have 30 minutes to approve with ${THUMBS_UP}.`
-        : `âœ… Booking for ${booking.position} on ${booking.date} at ${booking.start} has been sent to your mentor.`,
-      components: [],
-      ephemeral: true
+        ? `\u2705 Booking for ${booking.position} on ${booking.date} at ${booking.start} has been sent to your mentor. They have 30 minutes to approve with ${THUMBS_UP}.`
+        : `\u2705 Booking for ${booking.position} on ${booking.date} at ${booking.start} has been sent to your mentor.`,
+      components: []
     });
   }
 
@@ -970,7 +963,7 @@ function createInteractionHandlers({
 
     if (!Array.isArray(userBookings) || userBookings.length === 0) {
       await interaction.reply({
-        content: 'ðŸ“­ You have no bookings to tag a mentor for.',
+        content: '\u{1F4ED} You have no bookings to tag a mentor for.',
         ephemeral: true
       });
       return;
@@ -990,7 +983,7 @@ function createInteractionHandlers({
     );
 
     await interaction.reply({
-      content: `ðŸ‘¨â€ðŸ« Select the booking you want to notify **${mentor.user.username}** about:`,
+      content: `\u{1F468}\u200D\u{1F3EB} Select the booking you want to notify **${mentor.user.username}** about:`,
       components: [row],
       ephemeral: true
     });

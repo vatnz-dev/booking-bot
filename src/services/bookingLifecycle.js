@@ -75,7 +75,7 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
           content: `You dismissed the extension selection, so it was defaulted to no extra sectors.\n\n${traffic}`
         });
       } catch (err) {
-        console.warn(`âš ï¸ Could not DM user ${ownerId} with fallback extension stats:`, err?.message || err);
+        console.warn(`\u26A0\uFE0F Could not DM user ${ownerId} with fallback extension stats:`, err?.message || err);
       }
     }, 3 * 60 * 1000);
 
@@ -96,7 +96,7 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
       const msg = await fetchBookingMessage(removedBooking);
       if (msg) await msg.delete();
     } catch (err) {
-      console.warn(`âš ï¸ Could not auto-delete booking message ${messageId}:`, err?.message || err);
+      console.warn(`\u26A0\uFE0F Could not auto-delete booking message ${messageId}:`, err?.message || err);
     }
 
     if (dmText) {
@@ -104,7 +104,7 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
         const user = await client.users.fetch(entry.ownerId);
         await user.send({ content: dmText });
       } catch (err) {
-        console.warn(`âš ï¸ Could not DM user ${ownerId} about auto-deletion:`, err?.message || err);
+        console.warn(`\u26A0\uFE0F Could not DM user ${ownerId} about auto-deletion:`, err?.message || err);
       }
     }
 
@@ -210,7 +210,7 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
           newEmbed.addFields({ name: field.name, value: field.value, inline: field.inline });
         }
       }
-      newEmbed.addFields({ name: 'Mentor', value: `<@${booking.mentorId}> âœ… Approved`, inline: false });
+      newEmbed.addFields({ name: 'Mentor', value: `<@${booking.mentorId}> \u2705 Approved`, inline: false });
       await msg.edit({ embeds: [newEmbed] });
       await msg.reactions.removeAll().catch(() => {});
       await sendAuditLog({
@@ -222,7 +222,7 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
         color: '#3BA55D'
       });
     } catch (err) {
-      console.warn('âš ï¸ Failed to process mentor approval reaction:', err?.message || err);
+      console.warn('\u26A0\uFE0F Failed to process mentor approval reaction:', err?.message || err);
     }
   }
 

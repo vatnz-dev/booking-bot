@@ -6,13 +6,13 @@ async function getVatsimId(discordId) {
     const response = await axios.get(url);
 
     if (!response.data || !response.data.user_id) {
-      console.error('âŒ VATSIM ID not found in response.');
+      console.error('\u274C VATSIM ID not found in response.');
       return null;
     }
 
     return response.data.user_id;
   } catch (error) {
-    console.error('âŒ Failed to fetch VATSIM ID:', error.response?.status || error.message);
+    console.error('\u274C Failed to fetch VATSIM ID:', error.response?.status || error.message);
     return null;
   }
 }
