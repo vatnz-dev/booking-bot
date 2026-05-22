@@ -38,12 +38,19 @@ Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env
 
 ## Project Layout
 
-- `index.js` - Discord client setup, interaction wiring, and booking/event orchestration.
+- `index.js` - Discord client setup and module wiring.
+- `src/handlers/interactions.js` - Slash command, button, select menu, and modal handlers.
+- `src/handlers/ready.js` - Discord ready-time presence, schedulers, and booking prompt setup.
 - `src/commands/definitions.js` - Slash command definitions synced with Discord.
 - `src/constants.js` - Shared role IDs, timeouts, event positions, and sector mappings.
 - `src/data/databases.js` - Runtime JSON database setup.
+- `src/services/auditLog.js` - Staff audit-log embed delivery.
+- `src/services/bookingLifecycle.js` - Booking cleanup, mentor timers, and reaction approval handling.
+- `src/services/discordHelpers.js` - Channel/message lookup helpers.
+- `src/services/eventThreads.js` - VATNZ event feed parsing and event-thread lifecycle.
 - `src/services/positions.js` - VATNZ position lookup, validation, and booking eligibility.
 - `src/services/traffic.js` - Previous-week StatSim traffic lookup.
+- `src/services/vatsim.js` - VATSIM Discord account lookup.
 - `src/utils/format.js` - Shared formatting helpers.
 - `src/utils/time.js` - NZ/UTC date and time helpers.
 
