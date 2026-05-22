@@ -1,0 +1,93 @@
+const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
+const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
+const EVENT_CALENDAR_URL = process.env.EVENT_CALENDAR_URL || 'https://www.vatnz.net/events/calendar/vatnz-lite.ics';
+const VATNZ_POSITIONS_URL = process.env.VATNZ_POSITIONS_URL || 'https://www.vatnz.net/airspace/positions/';
+
+const EVENT_LOOKAHEAD_DAYS = 7;
+const ONE_HOUR_MS = 60 * 60 * 1000;
+const VATNZ_POSITION_CACHE_MS = 12 * ONE_HOUR_MS;
+const MENTOR_TAG_TIMEOUT_MS = 5 * 60 * 1000;
+const MENTOR_APPROVAL_TIMEOUT_MS = 30 * 60 * 1000;
+const FSS_ROLE_ID = '1424849958074454146';
+const THUMBS_UP = '\u{1F44D}';
+
+const ratingRoleIds = {
+  S1: '1424663440638611536',
+  S2: '1424663463564808213',
+  S3: '1424663506967592970',
+  I3: '1424663527670677504',
+  C1: '1427191104373264415',
+  C3: '1427191215689961473',
+  I1: '1427191337458864158'
+};
+
+const roleMap = {
+  '1424663440638611536': 'S1 - Developing Controller',
+  '1424663463564808213': 'S2 - Aerodrome Controller',
+  '1424663506967592970': 'S3 - Terminal Controller',
+  '1424663527670677504': 'I3 - Senior Instructor',
+  '1427191104373264415': 'C1 - Enroute Controller',
+  '1427191215689961473': 'C3 - Senior Controller',
+  '1427191337458864158': 'I1 - Instructor'
+};
+
+const FALLBACK_EVENT_POSITIONS = [
+  'NZZO-E_FSS', 'NZAA-R_CTR', 'NZCH-D_CTR', 'NZAA_DEP', 'NZCH_DEP',
+  'NZWN_DEP', 'NSTU_TWR', 'NZFX_TWR', 'NZMF_TWR', 'NZPP_TWR',
+  'NZFX_GND', 'NZQN_GND', 'NCRG_DEL', 'NZFX_DEL'
+];
+
+const sectorAerodromeMap = {
+  "NZCH-S_CTR": ["NZQN", "NZDN", "NZNV"],
+  "NZCH-T_CTR": ["NZWN", "NZWB", "NZNS"],
+  "NZAA_CTR": ["NZAA", "NZWP", "NZHN"],
+  "NZCH-B_CTR": ["NZRO", "NZTG", "NZGS"],
+  "NZCH-K_CTR": ["NZCH"],
+  "NZOH_CTR": ["NZOH", "NZPM", "NZNR"],
+  "NZAA-R_CTR": ["NZHN", "NZNP"],
+  "NZWN_APP": ["NZWN", "NZWB"],
+  "NZOH_APP": ["NZOH", "NZPM"],
+  "NZAA_APP": ["NZAA", "NZWP"]
+};
+
+const sectorCodeMap = {
+  "NZAA_CTR": "OCR",
+  "NZCH-B_CTR": "BAY",
+  "NZOH_CTR": "OHA",
+  "NZCH-K_CTR": "KAI",
+  "NZCH-T_CTR": "NAK",
+  "NZCH-S_CTR": "STH",
+  "NZAA-R_CTR": "RAN"
+};
+
+const autoInheritanceMap = {
+  "NZAA_CTR": ["NZCH-B_CTR"],
+  "NZCH-T_CTR": ["NZOH_CTR"],
+  "NZCH-S_CTR": ["NZCH-K_CTR"]
+};
+
+const allExtendableSectors = [
+  'NZCH-B_CTR', 'NZOH_CTR', 'NZCH-K_CTR',
+  'NZCH-S_CTR', 'NZCH-T_CTR', 'NZAA_CTR'
+];
+
+module.exports = {
+  LOG_CHANNEL_ID,
+  STAFF_ROLE_ID,
+  EVENT_CALENDAR_URL,
+  VATNZ_POSITIONS_URL,
+  EVENT_LOOKAHEAD_DAYS,
+  ONE_HOUR_MS,
+  VATNZ_POSITION_CACHE_MS,
+  MENTOR_TAG_TIMEOUT_MS,
+  MENTOR_APPROVAL_TIMEOUT_MS,
+  FSS_ROLE_ID,
+  THUMBS_UP,
+  ratingRoleIds,
+  roleMap,
+  FALLBACK_EVENT_POSITIONS,
+  sectorAerodromeMap,
+  sectorCodeMap,
+  autoInheritanceMap,
+  allExtendableSectors
+};

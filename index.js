@@ -1,20 +1,54 @@
 (async () => {
   require('dotenv').config();
 
-  const Database = require("easy-json-database")
-  const event = new Database('./event.json')
-  const messages = new Database("./messages.json");
-  const eventclose = new Database('./eventclose.json')
-  const eventThreads = new Database('./eventthreads.json')
-  const cheerio = require('cheerio');
-  const { DateTime } = require('luxon');
+  const { event, messages, eventclose, eventThreads } = require('./src/data/databases');
+  const commandDefinitions = require('./src/commands/definitions');
+  const {
+    LOG_CHANNEL_ID,
+    STAFF_ROLE_ID,
+    EVENT_CALENDAR_URL,
+    EVENT_LOOKAHEAD_DAYS,
+    ONE_HOUR_MS,
+    MENTOR_TAG_TIMEOUT_MS,
+    MENTOR_APPROVAL_TIMEOUT_MS,
+    FSS_ROLE_ID,
+    THUMBS_UP,
+    roleMap,
+    sectorAerodromeMap,
+    sectorCodeMap,
+    autoInheritanceMap,
+    allExtendableSectors
+  } = require('./src/constants');
+  const { cleanEmbedValue, summarizeError } = require('./src/utils/format');
+  const {
+    DateTime,
+    parseDdMm,
+    parseHhmm,
+    buildNzDateTime,
+    getEventDateTimes,
+    bookingOverlapsEvent,
+    getPreviousWeekNZ,
+    convertToUTC
+  } = require('./src/utils/time');
+  const {
+    resolveAerodromes,
+    formatAerodromeTraffic,
+    formatSectorTraffic
+  } = require('./src/services/traffic');
+  const {
+    validateVatnzPosition,
+    validateVatnzEventPosition,
+    getVatnzEventPositions,
+    evaluateBookingEligibility
+  } = require('./src/services/positions');
   const axios = require('axios');
   const dns = require('dns');
-  const events = require('events');
-  const { exec } = require("child_process");
   const Discord = require("discord.js");
   const buttonCooldowns = new Map();
   const {
+    Client,
+    GatewayIntentBits,
+    Partials,
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
@@ -22,50 +56,17 @@
     ButtonBuilder,
     ActionRowBuilder,
     StringSelectMenuBuilder,
-    PermissionFlagsBits,
     ActivityType,
     ButtonStyle,
     ChannelType
   } = require("discord.js");
-  const fs = require('fs');
-  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   dns.setDefaultResultOrder?.('ipv4first');
-  const trafficCache = new Map();
   const syncCommands = require('discord-sync-commands');
   const mentorTagTimeouts = new Map();
   const mentorApprovalTimeouts = new Map();
   const extensionSelectionTimeouts = new Map();
-  const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
-  const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
-  const EVENT_CALENDAR_URL = process.env.EVENT_CALENDAR_URL || 'https://www.vatnz.net/events/calendar/vatnz-lite.ics';
-  const VATNZ_POSITIONS_URL = process.env.VATNZ_POSITIONS_URL || 'https://www.vatnz.net/airspace/positions/';
-  const EVENT_LOOKAHEAD_DAYS = 7;
-  const ONE_HOUR_MS = 60 * 60 * 1000;
-  const VATNZ_POSITION_CACHE_MS = 12 * ONE_HOUR_MS;
-  const MENTOR_TAG_TIMEOUT_MS = 5 * 60 * 1000;
-  const MENTOR_APPROVAL_TIMEOUT_MS = 30 * 60 * 1000;
   let eventThreadCheckInterval = null;
   let bookingCleanupInterval = null;
-  let vatnzPositionCache = {
-    fetchedAt: 0,
-    positions: new Map()
-  };
-
-  const ratingRoleIds = {
-    S1: '1424663440638611536',
-    S2: '1424663463564808213',
-    S3: '1424663506967592970',
-    I3: '1424663527670677504',
-    C1: '1427191104373264415',
-    C3: '1427191215689961473',
-    I1: '1427191337458864158'
-  };
-  const THUMBS_UP = '\u{1F44D}';
-  const FALLBACK_EVENT_POSITIONS = [
-    'NZZO-E_FSS', 'NZAA-R_CTR', 'NZCH-D_CTR', 'NZAA_DEP', 'NZCH_DEP',
-    'NZWN_DEP', 'NSTU_TWR', 'NZFX_TWR', 'NZMF_TWR', 'NZPP_TWR',
-    'NZFX_GND', 'NZQN_GND', 'NCRG_DEL', 'NZFX_DEL'
-  ];
 
   let s4d = {
     Discord,
@@ -85,20 +86,6 @@
 
   function isStaffMember(member) {
     return Boolean(member?.roles?.cache?.has(STAFF_ROLE_ID));
-  }
-
-  function cleanEmbedValue(value, fallback = 'N/A') {
-    const text = value === undefined || value === null || value === '' ? fallback : String(value);
-    return text.length > 1024 ? `${text.slice(0, 1021)}...` : text;
-  }
-
-  function summarizeError(err) {
-    if (!err) return 'Unknown error';
-    const code = err.code || err.cause?.code;
-    const status = err.response?.status ? `HTTP ${err.response.status}` : null;
-    const url = err.config?.url;
-    const message = err.message || err.cause?.message || String(err);
-    return [code, status, message, url].filter(Boolean).join(' - ');
   }
 
   async function fetchDiscordChannel(channelId, label = 'channel') {
@@ -197,64 +184,6 @@
     } catch (err) {
       console.warn('Could not send audit log:', err?.message || err);
     }
-  }
-
-  function parseDdMm(dateStr) {
-    if (!/^\d{2}\/\d{2}$/.test(String(dateStr))) return null;
-    const [day, month] = String(dateStr).split('/').map(Number);
-    if (month < 1 || month > 12) return null;
-    const check = DateTime.fromObject({ year: DateTime.now().setZone('Pacific/Auckland').year, month, day }, { zone: 'Pacific/Auckland' });
-    if (!check.isValid) return null;
-    return { day, month };
-  }
-
-  function parseHhmm(time) {
-    const raw = String(time).padStart(4, '0');
-    if (!/^\d{4}$/.test(raw)) return null;
-    const hour = Number(raw.slice(0, 2));
-    const minute = Number(raw.slice(2));
-    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-    return { raw, hour, minute };
-  }
-
-  function buildNzDateTime(dateStr, timeStr, year) {
-    const date = parseDdMm(dateStr);
-    const time = parseHhmm(timeStr);
-    if (!date || !time) return null;
-
-    const value = DateTime.fromObject(
-      { year, month: date.month, day: date.day, hour: time.hour, minute: time.minute },
-      { zone: 'Pacific/Auckland' }
-    );
-
-    return value.isValid ? value : null;
-  }
-
-  function getBookingIntervalNz(booking, year) {
-    const startNz = buildNzDateTime(booking?.date, booking?.start, year);
-    const endNz = buildNzDateTime(booking?.date, booking?.end, year);
-    if (!startNz || !endNz) return null;
-    return { startNz, endNz };
-  }
-
-  function getEventDateTimes(eventData) {
-    const startUtc = DateTime.fromISO(eventData?.startUtcISO || eventData?.start, { zone: 'utc' });
-    const endUtc = DateTime.fromISO(eventData?.endUtcISO || eventData?.end, { zone: 'utc' });
-    if (!startUtc.isValid || !endUtc.isValid) return null;
-    return {
-      startUtc,
-      endUtc,
-      startNz: startUtc.setZone('Pacific/Auckland'),
-      endNz: endUtc.setZone('Pacific/Auckland')
-    };
-  }
-
-  function bookingOverlapsEvent(booking, eventData) {
-    const eventTimes = getEventDateTimes(eventData);
-    if (!eventTimes) return false;
-    const bookingTimes = getBookingIntervalNz(booking, eventTimes.startNz.year);
-    if (!bookingTimes) return false;
-    return bookingTimes.startNz < eventTimes.endNz && bookingTimes.endNz > eventTimes.startNz;
   }
 
   function unfoldIcsLines(text) {
@@ -817,323 +746,6 @@
     }, ONE_HOUR_MS);
   }
 
-const sectorAerodromeMap = {
-  "NZCH-S_CTR": ["NZQN", "NZDN", "NZNV"],
-  "NZCH-T_CTR": ["NZWN", "NZWB", "NZNS"],
-  "NZAA_CTR": ["NZAA", "NZWP", "NZHN"],
-  "NZCH-B_CTR": ["NZRO", "NZTG", "NZGS"],
-  "NZCH-K_CTR": ["NZCH"],
-  "NZOH_CTR": ["NZOH", "NZPM", "NZNR"],
-  "NZAA-R_CTR": ["NZHN", "NZNP"],
-  "NZWN_APP": ["NZWN", "NZWB"],
-  "NZOH_APP": ["NZOH", "NZPM"],
-  "NZAA_APP": ["NZAA", "NZWP"]
-};
-
-const sectorCodeMap = {
-  "NZAA_CTR": "OCR",
-  "NZCH-B_CTR": "BAY",
-  "NZOH_CTR": "OHA",
-  "NZCH-K_CTR": "KAI",
-  "NZCH-T_CTR": "NAK",
-  "NZCH-S_CTR": "STH",
-  "NZAA-R_CTR": "RAN"
-};
-
-function resolveAerodromes(position) {
-  if (sectorAerodromeMap[position]) return sectorAerodromeMap[position];
-  const match = position.match(/^([A-Z]{4})_(APP|TWR|GND|DEL)$/);
-  if (match) return [match[1]];
-  return [];
-}
-
-function getPreviousWeekNZ(dateStr, startHHMM = '0000') {
-  const [day, month] = dateStr.split('/').map(Number);
-  const hhmm = String(startHHMM).padStart(4, '0');
-  const hour = Number(hhmm.slice(0, 2));
-  const minute = Number(hhmm.slice(2));
-  const nowNZ = DateTime.now().setZone('Pacific/Auckland');
-
-  let bookingDate = DateTime.fromObject(
-    { year: nowNZ.year, month, day, hour, minute },
-    { zone: 'Pacific/Auckland' }
-  );
-
-  if (!bookingDate.isValid) {
-    return nowNZ.minus({ days: 7 }).toFormat('yyyy-MM-dd');
-  }
-
-  if (bookingDate < nowNZ) {
-    bookingDate = bookingDate.plus({ years: 1 });
-  }
-
-  return bookingDate.minus({ days: 7 }).toFormat('yyyy-MM-dd');
-}
-
-function getControllerTier(member) {
-  if (member.roles.cache.has(ratingRoleIds.I3)) return 'I3';
-  if (member.roles.cache.has(ratingRoleIds.I1)) return 'I1';
-  if (member.roles.cache.has(ratingRoleIds.C3)) return 'C3';
-  if (member.roles.cache.has(ratingRoleIds.C1)) return 'C1';
-  if (member.roles.cache.has(ratingRoleIds.S3)) return 'S3';
-  if (member.roles.cache.has(ratingRoleIds.S2)) return 'S2';
-  if (member.roles.cache.has(ratingRoleIds.S1)) return 'S1';
-  return 'UNRATED';
-}
-
-function getPositionType(position) {
-  if (position.endsWith('_CTR')) return 'CTR';
-  if (position.endsWith('_APP')) return 'APP';
-  if (/_((DEL)|(GND)|(TWR))$/.test(position)) return 'LOCAL';
-  return 'OTHER';
-}
-
-function getBookablePositionSuffix(position) {
-  return String(position || '').match(/_(FSS|CTR|APP|DEP|TWR|GND|DEL)$/)?.[1] || null;
-}
-
-function parseVatnzPositions(html) {
-  const $ = cheerio.load(html);
-  const positions = new Map();
-
-  $('table.positions tr').each((_, row) => {
-    const cells = $(row).find('td');
-    if (cells.length < 4) return;
-
-    const callsign = $(cells[0]).text().trim().toUpperCase();
-    const suffix = getBookablePositionSuffix(callsign);
-    if (!suffix) return;
-
-    const rowClass = $(row).attr('class') || '';
-    positions.set(callsign, {
-      callsign,
-      suffix,
-      isEvent: rowClass.split(/\s+/).includes('position_type_E')
-    });
-  });
-
-  return positions;
-}
-
-async function fetchVatnzPositions({ force = false } = {}) {
-  const now = Date.now();
-  if (!force && vatnzPositionCache.positions.size > 0 && now - vatnzPositionCache.fetchedAt < VATNZ_POSITION_CACHE_MS) {
-    return vatnzPositionCache.positions;
-  }
-
-  try {
-    const { data: html } = await axios.get(VATNZ_POSITIONS_URL, { timeout: 15000 });
-    const positions = parseVatnzPositions(html);
-    if (positions.size === 0) throw new Error('VATNZ position table was empty');
-
-    vatnzPositionCache = {
-      fetchedAt: now,
-      positions
-    };
-  } catch (err) {
-    if (vatnzPositionCache.positions.size > 0) {
-      console.warn(`Using cached VATNZ positions after fetch failed: ${summarizeError(err)}`);
-      return vatnzPositionCache.positions;
-    }
-    throw err;
-  }
-
-  return vatnzPositionCache.positions;
-}
-
-async function validateVatnzPosition(position) {
-  let positions;
-  try {
-    positions = await fetchVatnzPositions();
-  } catch (err) {
-    console.warn(`Could not verify VATNZ position directory: ${summarizeError(err)}`);
-    return {
-      valid: false,
-      reason: 'Could not verify the VATNZ position directory right now. Please try again shortly.'
-    };
-  }
-
-  const meta = positions.get(position);
-  if (!meta) {
-    return {
-      valid: false,
-      reason: `${position} is not a bookable VATNZ position. Please use a callsign from ${VATNZ_POSITIONS_URL}`
-    };
-  }
-
-  return { valid: true, meta };
-}
-
-async function validateVatnzEventPosition(position) {
-  const validation = await validateVatnzPosition(position);
-  if (!validation.valid) return validation;
-
-  if (!validation.meta.isEvent) {
-    return {
-      valid: false,
-      reason: `${position} is a standard VATNZ position, not an event-only position.`
-    };
-  }
-
-  return validation;
-}
-
-async function getVatnzEventPositions() {
-  try {
-    const positions = await fetchVatnzPositions();
-    const eventPositions = [...positions.values()]
-      .filter(position => position.isEvent)
-      .map(position => position.callsign);
-
-    return eventPositions.length > 0 ? eventPositions : FALLBACK_EVENT_POSITIONS;
-  } catch (err) {
-    console.warn(`Could not fetch VATNZ event position list: ${summarizeError(err)}`);
-    return FALLBACK_EVENT_POSITIONS;
-  }
-}
-
-function evaluateBookingEligibility(member, position) {
-  const tier = getControllerTier(member);
-  const type = getPositionType(position);
-
-  if (['C1', 'C3', 'I1', 'I3'].includes(tier)) {
-    return { allowed: true, mentorRequired: false };
-  }
-
-  if (tier === 'S3') {
-    if (type === 'CTR') return { allowed: true, mentorRequired: true };
-    if (type === 'APP' || type === 'LOCAL') return { allowed: true, mentorRequired: false };
-    return { allowed: false, reason: '❌ S3 can only book DEL/GND/TWR/APP directly. CTR requires mentor approval.' };
-  }
-
-  if (tier === 'S2') {
-    if (type === 'CTR') return { allowed: false, reason: '❌ S2 cannot book CTR positions.' };
-    if (type === 'APP') return { allowed: true, mentorRequired: true };
-    if (type === 'LOCAL') return { allowed: true, mentorRequired: false };
-    return { allowed: false, reason: '❌ S2 can only book DEL/GND/TWR directly, or APP with mentor approval.' };
-  }
-
-  if (tier === 'S1' || tier === 'UNRATED') {
-    if (type === 'CTR') return { allowed: false, reason: '❌ S1/unrated controllers cannot book CTR positions.' };
-    if (type === 'APP') return { allowed: false, reason: '❌ S1/unrated controllers cannot book APP positions.' };
-    if (type === 'LOCAL') return { allowed: true, mentorRequired: true };
-    return { allowed: false, reason: '❌ S1/unrated controllers can only book DEL/GND/TWR with mentor approval.' };
-  }
-
-  return { allowed: false, reason: '❌ Could not determine your booking permissions.' };
-}
-
-function hhmmToClock(hhmm) {
-  const raw = String(hhmm).padStart(4, '0');
-  return `${raw.slice(0, 2)}:${raw.slice(2)}`;
-}
-
-function buildUtcWindowFromNz(date, start = '0000', end = '2359') {
-  const [year, month, day] = String(date).split('-').map(Number);
-  const startRaw = String(start).padStart(4, '0');
-  const endRaw = String(end).padStart(4, '0');
-
-  const startHour = Number(startRaw.slice(0, 2));
-  const startMinute = Number(startRaw.slice(2));
-  const endHour = Number(endRaw.slice(0, 2));
-  const endMinute = Number(endRaw.slice(2));
-
-  const fromNz = DateTime.fromObject(
-    { year, month, day, hour: startHour, minute: startMinute },
-    { zone: 'Pacific/Auckland' }
-  );
-  const toNz = DateTime.fromObject(
-    { year, month, day, hour: endHour, minute: endMinute },
-    { zone: 'Pacific/Auckland' }
-  );
-
-  if (!fromNz.isValid || !toNz.isValid) {
-    return null;
-  }
-
-  return {
-    fromUtc: fromNz.toUTC().toFormat("yyyy-MM-dd'T'HH:mm"),
-    toUtc: toNz.toUTC().toFormat("yyyy-MM-dd'T'HH:mm")
-  };
-}
-
-async function getTrafficData(icao, date, start = '0000', end = '2359') {
-  const utcWindow = buildUtcWindowFromNz(date, start, end);
-  if (!utcWindow) {
-    return { icao, arrivals: 0, departures: 0 };
-  }
-
-  const { fromUtc, toUtc } = utcWindow;
-  const key = `${icao}_${fromUtc}_${toUtc}`;
-  if (trafficCache.has(key)) return trafficCache.get(key);
-
-  const url = `https://statsim.net/events/custom/${encodeURIComponent(fromUtc)}/${encodeURIComponent(toUtc)}/${icao}`;
-  const { data: html } = await axios.get(url);
-  const $ = cheerio.load(html);
-  const text = $('body').text();
-
-  const arrivals = parseInt(text.match(/Arrivals:\s*(\d+)/)?.[1] || 0);
-  const departures = parseInt(text.match(/Departures:\s*(\d+)/)?.[1] || 0);
-  const result = { icao, arrivals, departures };
-
-  trafficCache.set(key, result);
-  return result;
-}
-
-async function getSectorTraffic(sector, date, start = '0000', end = '2359') {
-  const aerodromes = sectorAerodromeMap[sector] || [];
-
-  const promises = aerodromes.map(icao =>
-    getTrafficData(icao, date, start, end).catch(() => ({ arrivals: 0, departures: 0 }))
-  );
-
-  const results = await Promise.all(promises);
-
-  let arrivals = 0;
-  let departures = 0;
-
-  for (const r of results) {
-    arrivals += r.arrivals;
-    departures += r.departures;
-  }
-
-  return {
-    sectorCode: sectorCodeMap[sector] || sector,
-    arrivals,
-    departures,
-    total: arrivals + departures
-  };
-}
-
-async function formatAerodromeTraffic(position, date, start = '0000', end = '2359') {
-  const aerodromes = resolveAerodromes(position);
-
-  const promises = aerodromes.map(icao =>
-    getTrafficData(icao, date, start, end).catch(() => ({ icao, arrivals: 0, departures: 0 }))
-  );
-
-  const results = await Promise.all(promises);
-
-  let out = `📊 **Expected Traffic (based on ${date} ${hhmmToClock(start)}-${hhmmToClock(end)})**\n`;
-
-  for (const r of results) {
-    out += `• **${r.icao}** — ${r.arrivals} arrivals / ${r.departures} departures\n`;
-  }
-
-  return out;
-}
-
-async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') {
-  let out = `📊 **Expected Traffic (based on ${date} ${hhmmToClock(start)}-${hhmmToClock(end)})**\n`;
-  for (const sector of sectors) {
-    const t = await getSectorTraffic(sector, date, start, end);
-    out += `• **${t.sectorCode}** — ${t.total} movements (${t.arrivals} arrivals / ${t.departures} departures)\n`;
-  }
-  return out;
-}
-
-  const { Client, GatewayIntentBits, Partials } = require('discord.js');
-
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -1539,27 +1151,6 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
     }
   });
 
-
-
-  function convertToUTC(dateStr, timeStr) {
-    const DateTime = require('luxon').DateTime;
-
-    const [day, month] = dateStr.split('/').map(Number);
-    let year = new Date().getFullYear();
-
-    const hours = timeStr.slice(0, 2);
-    const minutes = timeStr.slice(2);
-
-    let nzDate = DateTime.fromISO(`${year}-${month}-${day}T${hours}:${minutes}:00`).setZone('Pacific/Auckland');
-    const nowNZ = DateTime.now().setZone('Pacific/Auckland');
-
-    if (nzDate < nowNZ) {
-      nzDate = nzDate.plus({ years: 1 });
-    }
-
-    return nzDate.toISO();
-  }
-
   async function getVatsimId(discordId) {
     try {
       const url = `https://api.vatsim.net/v2/members/discord/${discordId}`;
@@ -1718,25 +1309,6 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
       const start = parseInt(i.fields.getTextInputValue('start').trim());
       const end = parseInt(i.fields.getTextInputValue('end').trim());
 
-
-      const autoInheritanceMap = {
-        "NZAA_CTR": ["NZCH-B_CTR"],
-        "NZCH-T_CTR": ["NZOH_CTR"],
-        "NZCH-S_CTR": ["NZCH-K_CTR"]
-      };
-
-      const fssRoleId = '1424849958074454146';
-
-      const roleMap = {
-        '1424663440638611536': 'S1 - Developing Controller',
-        '1424663463564808213': 'S2 - Aerodrome Controller',
-        '1424663506967592970': 'S3 - Terminal Controller',
-        '1424663527670677504': 'I3 - Senior Instructor',
-        '1427191104373264415': 'C1 - Enroute Controller',
-        '1427191215689961473': 'C3 - Senior Controller',
-        '1427191337458864158': 'I1 - Instructor'
-      };
-
       if (posRaw !== pos) return i.editReply({ content: '❌ Position must be in ALL CAPS.', ephemeral: true });
       if (isNaN(start) || isNaN(end)) return i.editReply({ content: '❌ Start and End times must be valid numbers.', ephemeral: true });
 
@@ -1805,7 +1377,7 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
         }
       }
 
-      if (positionMeta.suffix === 'FSS' && !member.roles.cache.has(fssRoleId)) {
+      if (positionMeta.suffix === 'FSS' && !member.roles.cache.has(FSS_ROLE_ID)) {
         return i.editReply({ content: '❌ You do not have the Oceanic Endorsement required to book this FSS position.', ephemeral: true });
       }
 
@@ -2011,11 +1583,6 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
         : '';
 
 if (isCTR) {
-  const allExtendable = [
-    'NZCH-B_CTR', 'NZOH_CTR', 'NZCH-K_CTR',
-    'NZCH-S_CTR', 'NZCH-T_CTR', 'NZAA_CTR'
-  ];
-
   const unavailable = new Set();
   for (const entry of rawDB) {
     const bookings = entry.data;
@@ -2037,7 +1604,7 @@ if (isCTR) {
     }
   }
 
-  const availableSectors = allExtendable.filter(sector =>
+  const availableSectors = allExtendableSectors.filter(sector =>
     sector !== pos &&
     !extendedSectors.includes(sector) &&
     !unavailable.has(sector)
@@ -2170,132 +1737,11 @@ if (isCTR) {
   }
 
 
-  syncCommands(client, [
-    {
-      name: 'viewbookings',
-      description: 'View your controller bookings.'
-    },
-    {
-      name: 'deletebookings',
-      description: 'Delete your controller bookings.',
-      options: [
-        {
-          type: 6,
-          name: 'controller',
-          description: 'Staff only: delete another controller booking.',
-          required: false
-        }
-      ]
-    },
-    {
-      name: 'expectedtraffic',
-      description: 'Check expected traffic using previous-week StatSim data.',
-      options: [
-        {
-          type: 3,
-          name: 'position',
-          description: 'Position, e.g. NZCH_APP',
-          required: true
-        },
-        {
-          type: 3,
-          name: 'date',
-          description: 'NZ date in DD/MM format',
-          required: true
-        },
-        {
-          type: 3,
-          name: 'start',
-          description: 'Start time in HHMM format',
-          required: true
-        },
-        {
-          type: 3,
-          name: 'end',
-          description: 'End time in HHMM format',
-          required: true
-        }
-      ]
-    },
-    {
-      name: 'openeventposition',
-      description: 'Open event positions.',
-      options: [
-        {
-          type: 3,
-          name: 'position',
-          description: 'What position do you want to open?',
-          required: true,
-          choices: [
-            { name: 'nzzo-e_fss', value: 'NZZO-E_FSS' },
-            { name: 'nzaa-r_ctr', value: 'NZAA-R_CTR' },
-            { name: 'nzch-d_ctr', value: 'NZCH-D_CTR' },
-            { name: 'nzaa_dep', value: 'NZAA_DEP' },
-            { name: 'nzch_dep', value: 'NZCH_DEP' },
-            { name: 'nzwn_dep', value: 'NZWN_DEP' },
-            { name: 'nstu_twr', value: 'NSTU_TWR' },
-            { name: 'nzmf_twr', value: 'NZMF_TWR' },
-            { name: 'nzpp_twr', value: 'NZPP_TWR' },
-            { name: 'nzfx_gnd', value: 'NZFX_GND' },
-            { name: 'nzqn_gnd', value: 'NZQN_GND' },
-            { name: 'ncrg_del', value: 'NCRG_DEL' },
-            { name: 'nzfx_del', value: 'NZFX_DEL' }
-          ]
-        },
-        {
-          type: 3,
-          name: 'date',
-          description: 'What date do you want to open? Format: DD/MM',
-          required: true
-        }
-      ]
-    },
-    {
-      name: 'closeeventposition',
-      description: 'Close event positions.',
-      options: [
-        {
-          type: 3,
-          name: 'position',
-          description: 'What position do you want to close?',
-          required: true,
-          choices: [
-            { name: 'nzzo-e_fss', value: 'NZZO-E_FSS' },
-            { name: 'nzaa-r_ctr', value: 'NZAA-R_CTR' },
-            { name: 'nzch-d_ctr', value: 'NZCH-D_CTR' },
-            { name: 'nzaa_dep', value: 'NZAA_DEP' },
-            { name: 'nzch_dep', value: 'NZCH_DEP' },
-            { name: 'nzwn_dep', value: 'NZWN_DEP' },
-            { name: 'nstu_twr', value: 'NSTU_TWR' },
-            { name: 'nzmf_twr', value: 'NZMF_TWR' },
-            { name: 'nzpp_twr', value: 'NZPP_TWR' },
-            { name: 'nzfx_gnd', value: 'NZFX_GND' },
-            { name: 'nzqn_gnd', value: 'NZQN_GND' },
-            { name: 'ncrg_del', value: 'NCRG_DEL' },
-            { name: 'nzfx_del', value: 'NZFX_DEL' }
-          ]
-        }
-      ]
-    },
-    {
-      name: 'mentor',
-      description: 'Tag your mentor in your post',
-      options: [
-        {
-          type: 6,
-          name: 'mentor',
-          description: 'Tag your mentor. Format: @mymentor',
-          required: true
-        }
-      ]
-    }
-  ], {
+  syncCommands(client, commandDefinitions, {
     debug: false
   });
 
   async function handleViewBookings(interaction) {
-    const { EmbedBuilder } = require('discord.js');
-
     const userId = String(interaction.member.user.id);
     const userBookings = messages.get(userId);
 
@@ -2387,17 +1833,6 @@ if (isCTR) {
 
   async function handleExtendSectorSelect(interaction) {
     try {
-      const Discord = require("discord.js");
-
-      const sectorCodeMap = {
-        "NZAA_CTR": "OCR",
-        "NZCH-B_CTR": "BAY",
-        "NZOH_CTR": "OHA",
-        "NZCH-K_CTR": "KAI",
-        "NZCH-T_CTR": "NAK",
-        "NZCH-S_CTR": "STH"
-      };
-
       const selections = interaction.values;
 
       const userId = String(interaction.member.user.id);
@@ -2473,7 +1908,7 @@ if (isCTR) {
         const msg = await fetchBookingMessage(booking);
         if (!msg) throw new Error('Booking message not found');
         const embed = msg.embeds[0];
-        const newEmbed = new Discord.EmbedBuilder()
+        const newEmbed = new EmbedBuilder()
           .setColor(embed.color)
           .setTitle(embed.title)
           .setTimestamp()

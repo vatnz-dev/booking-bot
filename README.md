@@ -23,7 +23,7 @@ VATNZ ATC Booking Bot is a Discord bot for controller booking, mentoring workflo
 
 ## Environment Variables
 
-Create a `.env` file in the project root, beside `index.js`:
+Copy `.env.example` to `.env` in the project root, then fill in your real Discord values:
 
 ```env
 DISCORD_TOKEN=your_bot_token_here
@@ -35,6 +35,17 @@ VATNZ_POSITIONS_URL=https://www.vatnz.net/airspace/positions/
 ```
 
 Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env`. Never commit `.env` or paste real server IDs into this README.
+
+## Project Layout
+
+- `index.js` - Discord client setup, interaction wiring, and booking/event orchestration.
+- `src/commands/definitions.js` - Slash command definitions synced with Discord.
+- `src/constants.js` - Shared role IDs, timeouts, event positions, and sector mappings.
+- `src/data/databases.js` - Runtime JSON database setup.
+- `src/services/positions.js` - VATNZ position lookup, validation, and booking eligibility.
+- `src/services/traffic.js` - Previous-week StatSim traffic lookup.
+- `src/utils/format.js` - Shared formatting helpers.
+- `src/utils/time.js` - NZ/UTC date and time helpers.
 
 ## Local Setup
 
@@ -85,13 +96,22 @@ The bot checks the VATNZ calendar feed on startup and hourly.
 These files are created locally and ignored by git:
 
 - `.env`
+- `event.json`
+- `eventclose.json`
 - `messages.json`
 - `eventthreads.json`
 - `node_modules/`
 
+The bot creates missing runtime JSON files automatically with empty objects. Demo versions live in `examples/`:
+
+- `examples/event.demo.json`
+- `examples/eventclose.demo.json`
+- `examples/messages.demo.json`
+- `examples/eventthreads.demo.json`
+
 ## Test Checklist
 
-1. Run `node --check index.js`.
+1. Run `node --check index.js` and check the files in `src/`.
 2. Install dependencies with `npm install`.
 3. Add a local `.env`.
 4. Start with `npm start`.

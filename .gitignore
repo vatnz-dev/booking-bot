@@ -1,4 +1,6 @@
 .env
+event.json
+eventclose.json
 messages.json
 eventthreads.json
 node_modules
