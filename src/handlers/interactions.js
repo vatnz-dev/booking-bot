@@ -22,6 +22,13 @@ const { parseDdMm, parseHhmm, getPreviousWeekNZ, convertToUTC } = require('../ut
 const { resolveAerodromes, formatAerodromeTraffic, formatSectorTraffic } = require('../services/traffic');
 const { validateVatnzPosition, validateVatnzEventPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
+const {
+  applySoloEndorsementOverride,
+  buildExpiryWarning,
+  buildSoloNotice,
+  formatEndorsementScope,
+  getBookingStartNz
+} = require('../services/soloEndorsements');
 
 function createInteractionHandlers({
   client,
@@ -278,11 +285,25 @@ function createInteractionHandlers({
         return i.editReply({ content: '\u274C You do not have the Oceanic Endorsement required to book this FSS position.', ephemeral: true });
       }
 
-      const eligibility = evaluateBookingEligibility(member, pos);
+      const vatsimId = await getVatsimId(userId);
+      if (!vatsimId) {
+        return i.editReply({ content: '\u274C Could not retrieve your VATSIM ID. Please ensure your Discord is linked Here: https://community.vatsim.net/', ephemeral: true });
+      }
+
+      const bookingDateNz = getBookingStartNz(date, startRaw);
+      const baseEligibility = evaluateBookingEligibility(member, pos);
+      const eligibility = await applySoloEndorsementOverride({
+        baseEligibility,
+        cid: vatsimId,
+        member,
+        position: pos,
+        bookingDateNz
+      });
       if (!eligibility.allowed) {
         return i.editReply({ content: eligibility.reason, ephemeral: true });
       }
       const mentorRequired = eligibility.mentorRequired === true;
+      const soloEndorsement = eligibility.soloEndorsement || null;
 
       const rawDB = messages.all();
       const isCTR = pos.endsWith("_CTR") && pos !== "NZAA-R_CTR";
@@ -382,11 +403,6 @@ function createInteractionHandlers({
       const startUTC = convertToUTC(date, String(start).padStart(4, '0'));
       const endUTC = convertToUTC(date, String(end).padStart(4, '0'));
 
-      const vatsimId = await getVatsimId(userId);
-      if (!vatsimId) {
-        return i.editReply({ content: '\u274C Could not retrieve your VATSIM ID. Please ensure your Discord is linked Here: https://community.vatsim.net/', ephemeral: true });
-      }
-
       const bookingEmbed = new EmbedBuilder()
         .setColor('#000000')
         .setTitle(pos)
@@ -408,6 +424,13 @@ function createInteractionHandlers({
       if (extendedSectors.length > 0) {
         const display = extendedSectors.map(s => sectorCodeMap[s] || s);
         bookingEmbed.addFields({ name: 'Extended Sectors', value: display.join(', '), inline: false });
+      }
+      if (soloEndorsement) {
+        bookingEmbed.addFields({
+          name: 'Solo Endorsement',
+          value: buildSoloNotice(soloEndorsement),
+          inline: false
+        });
       }
 
       for (const [roleId, label] of Object.entries(roleMap)) {
@@ -441,6 +464,13 @@ function createInteractionHandlers({
         mentorRequired,
         mentorId: null,
         mentorApproved: false,
+        soloEndorsement: soloEndorsement ? {
+          source: soloEndorsement.source,
+          scope: formatEndorsementScope(soloEndorsement),
+          endDate: soloEndorsement.endDate,
+          endDateISO: soloEndorsement.endDateISO,
+          url: soloEndorsement.url
+        } : null,
         startUtc: startUTC,
         endUtc: endUTC,
         createdAt: new Date().toISOString()
@@ -461,8 +491,11 @@ function createInteractionHandlers({
       if (mentorRequired) {
         scheduleMentorTagTimeout(userId, sentMessage.id);
       }
+      const expiryWarning = soloEndorsement ? buildExpiryWarning(soloEndorsement) : null;
       const mentorNotice = mentorRequired
         ? '\nMentor required. If you do not tag a mentor within 5 minutes, this booking will be auto-deleted.'
+        : soloEndorsement
+          ? `\n${buildSoloNotice(soloEndorsement)}${expiryWarning ? `\n${expiryWarning}` : ''}`
         : '';
 
       if (isCTR) {

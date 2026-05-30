@@ -13,6 +13,8 @@ VATNZ ATC Booking Bot is a Discord bot for controller booking, mentoring workflo
 - Delete event threads 1 hour after the event ends.
 - Move overlapping bookings into event threads by reposting the booking embed, deleting the original, and updating stored message IDs.
 - Check expected previous-week StatSim traffic with `/expectedtraffic`.
+- Apply current VATNZ solo/S1 endorsements to remove mentor requirements for matching positions.
+- Warn known booking users 30 days, 1 day, and on the day a dated endorsement expires.
 
 ## Requirements
 
@@ -32,6 +34,8 @@ LOG_CHANNEL_ID=your_staff_log_channel_id_here
 STAFF_ROLE_ID=your_staff_role_id_here
 EVENT_CALENDAR_URL=https://www.vatnz.net/events/calendar/vatnz-lite.ics
 VATNZ_POSITIONS_URL=https://www.vatnz.net/airspace/positions/
+SOLO_ENDORSEMENTS_URL=https://www.vatnz.net/controllers/endorsements/approved-solo-endorsements/
+S1_SOLO_ENDORSEMENTS_URL=https://www.vatnz.net/controllers/endorsements/list-s1-holders-approved-connect-under-622-s1-tower-trainee-policy/
 ```
 
 Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env`. Never commit `.env` or paste real server IDs into this README.
@@ -49,6 +53,7 @@ Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env
 - `src/services/discordHelpers.js` - Channel/message lookup helpers.
 - `src/services/eventThreads.js` - VATNZ event feed parsing and event-thread lifecycle.
 - `src/services/positions.js` - VATNZ position lookup, validation, and booking eligibility.
+- `src/services/soloEndorsements.js` - VATNZ solo/S1 endorsement lookup, mentor overrides, and expiry warnings.
 - `src/services/traffic.js` - Previous-week StatSim traffic lookup.
 - `src/services/vatsim.js` - VATSIM Discord account lookup.
 - `src/utils/format.js` - Shared formatting helpers.
@@ -105,6 +110,7 @@ These files are created locally and ignored by git:
 - `.env`
 - `event.json`
 - `eventclose.json`
+- `endorsementwarnings.json`
 - `messages.json`
 - `eventthreads.json`
 - `node_modules/`
@@ -113,8 +119,11 @@ The bot creates missing runtime JSON files automatically with empty objects. Dem
 
 - `examples/event.demo.json`
 - `examples/eventclose.demo.json`
+- `examples/endorsementwarnings.demo.json`
 - `examples/messages.demo.json`
 - `examples/eventthreads.demo.json`
+
+Solo endorsement expiry warnings are sent to Discord users the bot can map to a VATSIM CID, currently users with bookings stored in `messages.json`.
 
 ## Test Checklist
 

@@ -3,5 +3,6 @@ event.json
 eventclose.json
 messages.json
 eventthreads.json
+endorsementwarnings.json
 node_modules
 

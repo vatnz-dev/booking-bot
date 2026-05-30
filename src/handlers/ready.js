@@ -12,12 +12,14 @@ function registerReadyHandlers({
   getBookingChannel,
   getVatnzEventPositions,
   startBookingCleanupScheduler,
-  startEventThreadScheduler
+  startEventThreadScheduler,
+  startEndorsementWarningScheduler
 }) {
   client.once('clientReady', () => {
     console.log(`${client.user.tag} is alive!`);
     startBookingCleanupScheduler();
     startEventThreadScheduler();
+    startEndorsementWarningScheduler?.();
   });
 
   client.on('clientReady', async () => {

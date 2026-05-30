@@ -236,6 +236,13 @@ function createEventThreadService({
     if (Array.isArray(booking.extendedSectors) && booking.extendedSectors.length > 0) {
       embed.addFields({ name: 'Extended Sectors', value: booking.extendedSectors.map(s => sectorCodeMap[s] || s).join(', '), inline: false });
     }
+    if (booking.soloEndorsement?.scope) {
+      embed.addFields({
+        name: 'Solo Endorsement',
+        value: `${booking.soloEndorsement.scope} (expires ${booking.soloEndorsement.endDate || booking.soloEndorsement.endDateISO})`,
+        inline: false
+      });
+    }
     if (booking.mentorId) {
       embed.addFields({
         name: 'Mentor',

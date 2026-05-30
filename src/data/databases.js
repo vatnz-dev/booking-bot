@@ -8,7 +8,8 @@ const dbPaths = {
   event: path.join(projectRoot, 'event.json'),
   messages: path.join(projectRoot, 'messages.json'),
   eventclose: path.join(projectRoot, 'eventclose.json'),
-  eventThreads: path.join(projectRoot, 'eventthreads.json')
+  eventThreads: path.join(projectRoot, 'eventthreads.json'),
+  endorsementWarnings: path.join(projectRoot, 'endorsementwarnings.json')
 };
 
 function ensureJsonFile(filePath) {
@@ -26,5 +27,6 @@ module.exports = {
   messages: new Database(dbPaths.messages),
   eventclose: new Database(dbPaths.eventclose),
   eventThreads: new Database(dbPaths.eventThreads),
+  endorsementWarnings: new Database(dbPaths.endorsementWarnings),
   dbPaths
 };

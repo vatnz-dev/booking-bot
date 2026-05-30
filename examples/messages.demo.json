@@ -16,6 +16,13 @@
       "mentorRequired": false,
       "mentorId": null,
       "mentorApproved": false,
+      "soloEndorsement": {
+        "source": "solo",
+        "scope": "NZCH_APP",
+        "endDate": "25/07/2026",
+        "endDateISO": "2026-07-25",
+        "url": "https://www.vatnz.net/controllers/endorsements/approved-solo-endorsements/"
+      },
       "startUtc": "2026-06-25T06:00:00.000Z",
       "endUtc": "2026-06-25T08:00:00.000Z",
       "createdAt": "2026-06-01T00:00:00.000Z"

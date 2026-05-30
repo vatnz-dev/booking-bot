@@ -6,7 +6,7 @@
   const { Client, GatewayIntentBits, Partials } = require('discord.js');
   const syncCommands = require('discord-sync-commands');
 
-  const { event, messages, eventclose, eventThreads } = require('./src/data/databases');
+  const { event, messages, eventclose, eventThreads, endorsementWarnings } = require('./src/data/databases');
   const commandDefinitions = require('./src/commands/definitions');
   const { STAFF_ROLE_ID } = require('./src/constants');
   const { getVatnzEventPositions } = require('./src/services/positions');
@@ -14,6 +14,8 @@
   const { createAuditLogger } = require('./src/services/auditLog');
   const { createBookingLifecycle } = require('./src/services/bookingLifecycle');
   const { createEventThreadService } = require('./src/services/eventThreads');
+  const { createEndorsementWarningService } = require('./src/services/soloEndorsements');
+  const { getVatsimId } = require('./src/services/vatsim');
   const { createInteractionHandlers } = require('./src/handlers/interactions');
   const { registerReadyHandlers } = require('./src/handlers/ready');
 
@@ -76,6 +78,13 @@
     isStaffMember
   });
 
+  const endorsementWarningService = createEndorsementWarningService({
+    client,
+    messages,
+    endorsementWarnings,
+    getVatsimId
+  });
+
   const interactionHandlers = createInteractionHandlers({
     client,
     event,
@@ -95,7 +104,8 @@
     getBookingChannel: discordHelpers.getBookingChannel,
     getVatnzEventPositions,
     startBookingCleanupScheduler: bookingLifecycle.startBookingCleanupScheduler,
-    startEventThreadScheduler: eventThreadService.startEventThreadScheduler
+    startEventThreadScheduler: eventThreadService.startEventThreadScheduler,
+    startEndorsementWarningScheduler: endorsementWarningService.startEndorsementWarningScheduler
   });
 
   interactionHandlers.registerInteractionHandlers();
