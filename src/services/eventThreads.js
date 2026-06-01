@@ -8,10 +8,12 @@ const {
 } = require('discord.js');
 
 const {
+  EVENT_CHECK_INTERVAL_MS,
   EVENT_CALENDAR_URL,
   EVENT_LOOKAHEAD_DAYS,
+  EVENT_NOTIFICATION_LEAD_MS,
+  EVENT_NOTIFICATIONS_ROLE_ID,
   LOG_CHANNEL_ID,
-  ONE_HOUR_MS,
   STAFF_ROLE_ID,
   THUMBS_UP,
   sectorCodeMap
@@ -192,6 +194,20 @@ function buildEventEmbed(eventData, title = 'VATNZ Event') {
   return embed;
 }
 
+function getDiscordTimestamp(dateTime, style = 'F') {
+  return `<t:${Math.floor(dateTime.toSeconds())}:${style}>`;
+}
+
+function getAirportPositionParts(position) {
+  const match = String(position || '').toUpperCase().match(/^([A-Z]{4})_(DEL|GND|TWR|APP|DEP)$/);
+  if (!match) return null;
+  return { airport: match[1], suffix: match[2] };
+}
+
+function formatController(ownerId) {
+  return ownerId ? ` <@${ownerId}>` : '';
+}
+
 async function fetchVatnzEvents() {
   const { data } = await axios.get(EVENT_CALENDAR_URL, { timeout: 15000 });
   return parseVatnzIcsEvents(data);
@@ -291,12 +307,187 @@ function createEventThreadService({
     });
 
     setEventThreadState(eventData.uid, {
+      ...(existing || {}),
       status: 'prompted',
       promptMessageId: promptMessage.id,
       promptChannelId: logChannel.id,
       event: compactEventState(eventData),
       updatedAt: new Date().toISOString()
     });
+  }
+
+  function getEventCoverage(eventData) {
+    const airports = new Map();
+    const enroute = [];
+
+    for (const entry of messages.all()) {
+      const ownerId = entry.key;
+      const bookings = entry.data;
+      if (!Array.isArray(bookings)) continue;
+
+      for (const booking of bookings) {
+        if (!bookingOverlapsEvent(booking, eventData)) continue;
+
+        const position = String(booking.position || '').toUpperCase();
+        const airportParts = getAirportPositionParts(position);
+        if (airportParts) {
+          if (!airports.has(airportParts.airport)) airports.set(airportParts.airport, []);
+          airports.get(airportParts.airport).push(`${airportParts.suffix}${formatController(ownerId)}`);
+          continue;
+        }
+
+        if (position.endsWith('_CTR') || position.endsWith('_FSS')) {
+          const primary = `${sectorCodeMap[position] || position} (${position})${formatController(ownerId)}`;
+          const extensions = Array.isArray(booking.extendedSectors) && booking.extendedSectors.length > 0
+            ? ` - extensions: ${booking.extendedSectors.map(sector => `${sectorCodeMap[sector] || sector} (${sector})`).join(', ')}`
+            : '';
+          enroute.push(`${primary}${extensions}`);
+        }
+      }
+    }
+
+    return { airports, enroute };
+  }
+
+  function buildCoverageLines(coverage) {
+    const airportLines = [...coverage.airports.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([airport, positions]) => `${airport}: ${[...new Set(positions)].join(', ')}`);
+
+    const enrouteLines = [...new Set(coverage.enroute)].sort((a, b) => a.localeCompare(b));
+
+    return {
+      airports: airportLines.length > 0 ? airportLines.join('\n') : 'No airport/local coverage booked yet.',
+      enroute: enrouteLines.length > 0 ? enrouteLines.join('\n') : 'No enroute/control coverage booked yet.'
+    };
+  }
+
+  function buildEventCoverageEmbed(eventData) {
+    const eventTimes = getEventDateTimes(eventData);
+    const coverage = buildCoverageLines(getEventCoverage(eventData));
+    const startValue = eventTimes
+      ? `${getDiscordTimestamp(eventTimes.startUtc, 'F')} (${getDiscordTimestamp(eventTimes.startUtc, 'R')})`
+      : 'Unknown start time';
+
+    const embed = new EmbedBuilder()
+      .setColor('#0057B8')
+      .setTitle(`${eventData.title} Coverage`)
+      .addFields(
+        { name: 'Event Starts', value: startValue, inline: false },
+        { name: 'Airports With Control', value: cleanEmbedValue(coverage.airports), inline: false },
+        { name: 'Enroute / Control', value: cleanEmbedValue(coverage.enroute), inline: false }
+      )
+      .setTimestamp();
+
+    if (eventData.url) {
+      embed.addFields({ name: 'Event Link', value: `[Open event](${eventData.url})`, inline: false });
+    }
+
+    return embed;
+  }
+
+  function shouldPostEventCoverageNotification(eventData, state) {
+    if (state?.notificationMessageId || state?.notificationDeletedAt) return false;
+    const eventTimes = getEventDateTimes(eventData);
+    if (!eventTimes) return false;
+
+    const nowNz = DateTime.now().setZone('Pacific/Auckland');
+    const notificationAt = eventTimes.startNz.minus({ milliseconds: EVENT_NOTIFICATION_LEAD_MS });
+    return nowNz >= notificationAt && nowNz < eventTimes.endNz;
+  }
+
+  async function postEventCoverageNotification(eventData) {
+    const state = getEventThreadState(eventData.uid) || {};
+    if (!shouldPostEventCoverageNotification(eventData, state)) return;
+
+    const channel = await getBookingChannel();
+    if (!channel?.send) return;
+
+    const content = EVENT_NOTIFICATIONS_ROLE_ID ? `<@&${EVENT_NOTIFICATIONS_ROLE_ID}>` : undefined;
+    const sent = await channel.send({
+      content,
+      allowedMentions: EVENT_NOTIFICATIONS_ROLE_ID ? { roles: [EVENT_NOTIFICATIONS_ROLE_ID] } : { parse: [] },
+      embeds: [buildEventCoverageEmbed(eventData)]
+    });
+
+    setEventThreadState(eventData.uid, {
+      ...state,
+      event: compactEventState(eventData),
+      notificationMessageId: sent.id,
+      notificationChannelId: channel.id,
+      notificationPostedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+
+    await sendAuditLog({
+      action: 'Event Coverage Notification Posted',
+      actorLabel: 'System',
+      fields: [
+        { name: 'Event', value: eventData.title, inline: false },
+        { name: 'Message', value: `[Open message](https://discord.com/channels/${sent.guild?.id || '@me'}/${channel.id}/${sent.id})`, inline: false }
+      ],
+      color: '#0057B8'
+    });
+  }
+
+  async function cleanupFinishedEventCoverageNotifications() {
+    const nowNz = DateTime.now().setZone('Pacific/Auckland');
+
+    for (const entry of eventThreads.all()) {
+      const uid = entry.key;
+      const state = entry.data;
+      if (!state?.notificationMessageId || state.notificationDeletedAt || !state.event) continue;
+
+      const eventTimes = getEventDateTimes(state.event);
+      if (!eventTimes || nowNz < eventTimes.endNz) continue;
+
+      const retryState = {
+        ...state,
+        updatedAt: new Date().toISOString()
+      };
+
+      const channel = state.notificationChannelId
+        ? await fetchDiscordChannel(state.notificationChannelId, 'event notifications channel')
+        : await getBookingChannel();
+      if (!channel?.messages) {
+        eventThreads.set(uid, {
+          ...retryState,
+          notificationDeleteError: 'Notification channel was not found.'
+        });
+        continue;
+      }
+
+      try {
+        const message = await channel.messages.fetch(state.notificationMessageId);
+        await message.delete();
+      } catch (err) {
+        if (err?.code !== 10008) {
+          console.warn(`Could not delete event coverage notification ${state.notificationMessageId}:`, err?.message || err);
+          eventThreads.set(uid, {
+            ...retryState,
+            notificationDeleteError: err?.message || String(err)
+          });
+          continue;
+        }
+      }
+
+      const updatedState = {
+        ...retryState,
+        notificationDeletedAt: new Date().toISOString()
+      };
+      delete updatedState.notificationDeleteError;
+
+      eventThreads.set(uid, updatedState);
+      await sendAuditLog({
+        action: 'Event Coverage Notification Deleted',
+        actorLabel: 'System',
+        fields: [
+          { name: 'Event', value: state.event.title, inline: false },
+          { name: 'Message ID', value: state.notificationMessageId, inline: true }
+        ],
+        color: '#D9534F'
+      });
+    }
   }
 
   async function moveBookingsIntoEventThread(eventData, thread) {
@@ -559,6 +750,7 @@ function createEventThreadService({
   }
 
   async function checkVatnzEventThreads() {
+    await cleanupFinishedEventCoverageNotifications();
     await cleanupFinishedEventThreads();
 
     const eventsFromFeed = await fetchVatnzEvents();
@@ -567,7 +759,10 @@ function createEventThreadService({
       .sort((a, b) => (getEventDateTimes(a)?.startNz?.toMillis() || 0) - (getEventDateTimes(b)?.startNz?.toMillis() || 0));
 
     for (const eventData of upcoming) {
-      const existing = getEventThreadState(eventData.uid);
+      let existing = getEventThreadState(eventData.uid);
+      await postEventCoverageNotification(eventData);
+      existing = getEventThreadState(eventData.uid);
+
       if (existing?.status === 'created' && existing.threadId) {
         setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
         const thread = await fetchDiscordChannel(existing.threadId, 'event thread');
@@ -597,13 +792,16 @@ function createEventThreadService({
     checkVatnzEventThreads().catch(err => console.warn(`Event thread check failed: ${summarizeError(err)}`));
     eventThreadCheckInterval = setInterval(() => {
       checkVatnzEventThreads().catch(err => console.warn(`Event thread check failed: ${summarizeError(err)}`));
-    }, ONE_HOUR_MS);
+    }, EVENT_CHECK_INTERVAL_MS);
   }
 
   return {
     getEventThreadState,
     setEventThreadState,
     buildBookingEmbedFromRecord,
+    buildEventCoverageEmbed,
+    postEventCoverageNotification,
+    cleanupFinishedEventCoverageNotifications,
     updateEventPromptMessage,
     postEventThreadPrompt,
     moveBookingsIntoEventThread,
@@ -631,5 +829,6 @@ module.exports = {
   normalizeEventTitleForThreadName,
   ordinalDay,
   buildEventThreadName,
-  buildEventEmbed
+  buildEventEmbed,
+  getDiscordTimestamp
 };

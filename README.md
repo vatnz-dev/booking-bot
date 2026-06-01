@@ -10,6 +10,7 @@ VATNZ ATC Booking Bot is a Discord bot for controller booking, mentoring workflo
 - Log booking creates, deletes, mentor actions, auto-deletes, event prompts, event thread creation, and event booking moves.
 - Fetch VATNZ events from the official calendar feed and create event threads.
 - Automatically create Christchurch Control event threads based on the event name, including the current VATNZ feed typo `Chrsitchurch Control`.
+- Post event coverage notifications in the booking/events channel 1 hour before event start.
 - Delete event threads 1 hour after the event ends.
 - Move overlapping bookings into event threads by reposting the booking embed, deleting the original, and updating stored message IDs.
 - Check expected previous-week StatSim traffic with `/expectedtraffic`.
@@ -32,6 +33,7 @@ DISCORD_TOKEN=your_bot_token_here
 CHANNEL_ID=your_booking_channel_id_here
 LOG_CHANNEL_ID=your_staff_log_channel_id_here
 STAFF_ROLE_ID=your_staff_role_id_here
+EVENT_NOTIFICATIONS_ROLE_ID=your_event_notifications_role_id_here
 EVENT_CALENDAR_URL=https://www.vatnz.net/events/calendar/vatnz-lite.ics
 VATNZ_POSITIONS_URL=https://www.vatnz.net/airspace/positions/
 SOLO_ENDORSEMENTS_URL=https://www.vatnz.net/controllers/endorsements/approved-solo-endorsements/
@@ -92,12 +94,15 @@ npm.cmd start
 
 ## Event Threads
 
-The bot checks the VATNZ calendar feed on startup and hourly.
+The bot checks the VATNZ calendar feed on startup and every 5 minutes.
 
 - Events inside the next 7 days get a staff prompt in the log channel.
 - Christchurch Control events are created automatically by matching the VATNZ event name, not by checking NZCH positions.
 - Other events show Create Thread and Decline buttons for staff.
 - Event threads are public threads under the booking channel.
+- 1 hour before an event starts, the bot posts a coverage embed in the booking/events channel and pings `EVENT_NOTIFICATIONS_ROLE_ID` if configured.
+- The coverage embed lists booked airport positions, enroute/control positions, extensions, and the event start timestamp.
+- The coverage embed is deleted when the event finishes.
 - Event thread names use the format `Christchurch Control - 13th May`.
 - Existing overlapping bookings are reposted into the thread, original messages are deleted, and `messages.json` is updated.
 - New overlapping bookings are posted directly into the event thread.

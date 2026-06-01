@@ -14,6 +14,10 @@
     },
     "source": "auto",
     "createdBy": null,
+    "notificationMessageId": "777777777777777777",
+    "notificationChannelId": "444444444444444444",
+    "notificationPostedAt": "2026-06-25T05:00:00.000Z",
+    "notificationDeletedAt": "2026-06-25T08:00:00.000Z",
     "createdAt": "2026-06-01T00:00:00.000Z",
     "movedBookings": [],
     "updatedAt": "2026-06-01T00:00:00.000Z"
