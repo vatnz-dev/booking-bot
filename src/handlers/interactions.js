@@ -18,7 +18,17 @@ const {
   sectorAerodromeMap,
   sectorCodeMap
 } = require('../constants');
-const { parseDdMm, parseHhmm, getPreviousWeekNZ, convertToUTC } = require('../utils/time');
+const {
+  convertToUTC,
+  formatBookingDateForDiscord,
+  formatBookingEndForDiscord,
+  formatBookingStartForDiscord,
+  formatBookingWindowForDiscord,
+  getBookingDisplayInterval,
+  getPreviousWeekNZ,
+  parseDdMm,
+  parseHhmm
+} = require('../utils/time');
 const { resolveAerodromes, formatAerodromeTraffic, formatSectorTraffic } = require('../services/traffic');
 const { validateVatnzPosition, validateVatnzEventPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
@@ -29,6 +39,26 @@ const {
   formatEndorsementScope,
   getBookingStartNz
 } = require('../services/soloEndorsements');
+
+function getBookingDateDisplay(booking) {
+  return formatBookingDateForDiscord(booking) || booking.date;
+}
+
+function getBookingStartDisplay(booking) {
+  return formatBookingStartForDiscord(booking) || String(booking.start);
+}
+
+function getBookingEndDisplay(booking) {
+  return formatBookingEndForDiscord(booking) || String(booking.end);
+}
+
+function getBookingWindowDisplay(booking) {
+  return formatBookingWindowForDiscord(booking) || `on ${booking.date} from ${booking.start} to ${booking.end}`;
+}
+
+function getBookingSortMillis(booking) {
+  return getBookingDisplayInterval(booking)?.startUtc?.toMillis() || 0;
+}
 
 function createInteractionHandlers({
   client,
@@ -197,8 +227,8 @@ function createInteractionHandlers({
 
     await interaction.editReply({
       content: targetUserId === userId
-        ? `\u2705 Booking for ${booking.position} on ${booking.date} at ${booking.start} has been deleted.`
-        : `\u2705 Booking for ${booking.position} on ${booking.date} at ${booking.start} has been deleted for <@${targetUserId}>.`,
+        ? `\u2705 Booking for ${booking.position} ${getBookingWindowDisplay(booking)} has been deleted.`
+        : `\u2705 Booking for ${booking.position} ${getBookingWindowDisplay(booking)} has been deleted for <@${targetUserId}>.`,
       components: []
     });
   }
@@ -384,7 +414,7 @@ function createInteractionHandlers({
                     .setColor('#FF0000')
                     .setTitle('Extended Sectors Removed')
                     .setDescription(
-                      `The following sectors were removed from your booking on **${b.date}**:\n` +
+                      `The following sectors were removed from your booking ${getBookingWindowDisplay(b)}:\n` +
                       removedSectors.map(s => `\u2022 ${sectorCodeMap[s] || s}`).join('\n') +
                       `\n\nReason: ${reason}`
                     )
@@ -402,15 +432,16 @@ function createInteractionHandlers({
 
       const startUTC = convertToUTC(date, String(start).padStart(4, '0'));
       const endUTC = convertToUTC(date, String(end).padStart(4, '0'));
+      const bookingDisplayRecord = { date, start, end, startUtc: startUTC, endUtc: endUTC };
 
       const bookingEmbed = new EmbedBuilder()
         .setColor('#000000')
         .setTitle(pos)
         .setTimestamp(new Date())
         .addFields(
-          { name: 'Date', value: date, inline: false },
-          { name: 'Start', value: String(start), inline: true },
-          { name: 'End', value: String(end), inline: true },
+          { name: 'Date', value: getBookingDateDisplay(bookingDisplayRecord), inline: false },
+          { name: 'Start', value: getBookingStartDisplay(bookingDisplayRecord), inline: true },
+          { name: 'End', value: getBookingEndDisplay(bookingDisplayRecord), inline: true },
           { name: 'Controller', value: `<@${userId}>`, inline: false }
         )
         .setThumbnail(member.user.displayAvatarURL({ format: "png" }));
@@ -659,27 +690,14 @@ function createInteractionHandlers({
       return;
     }
 
-    const sorted = userBookings.sort((a, b) => {
-      const [dayA, monthA] = a.date.split('/').map(Number);
-      const [dayB, monthB] = b.date.split('/').map(Number);
-      const currentYear = new Date().getFullYear();
-      const startA = String(a.start).padStart(4, '0');
-      const startB = String(b.start).padStart(4, '0');
-      const hourA = parseInt(startA.slice(0, 2), 10);
-      const minuteA = parseInt(startA.slice(2), 10);
-      const hourB = parseInt(startB.slice(0, 2), 10);
-      const minuteB = parseInt(startB.slice(2), 10);
-      const dateA = new Date(currentYear, monthA - 1, dayA, hourA, minuteA);
-      const dateB = new Date(currentYear, monthB - 1, dayB, hourB, minuteB);
-      return dateA - dateB;
-    });
+    const sorted = [...userBookings].sort((a, b) => getBookingSortMillis(a) - getBookingSortMillis(b));
 
     const embed = new EmbedBuilder()
       .setTitle('\u{1F4CB} Your Bookings')
       .setColor('#00AEFF')
       .setDescription(
         sorted.map(b =>
-          `\u2022 **${b.position}** on **${b.date}** from **${b.start}** to **${b.end}**`
+          `\u2022 **${b.position}**: ${getBookingWindowDisplay(b)}`
         ).join('\n')
       )
       .setFooter({ text: 'Use /deletebookings to remove a booking.' });
@@ -973,8 +991,8 @@ function createInteractionHandlers({
           color: 0x000000,
           title: 'Your student has booked a session',
           description: booking.mentorRequired
-            ? `${interaction.user.username} has booked **${booking.position}** on **${booking.date}** at **${booking.start}** and tagged you. Please react with ${THUMBS_UP} on the booking message above within 30 minutes.`
-            : `${interaction.user.username} has booked **${booking.position}** on **${booking.date}** at **${booking.start}** and tagged you.`
+            ? `${interaction.user.username} has booked **${booking.position}** ${getBookingWindowDisplay(booking)} and tagged you. Please react with ${THUMBS_UP} on the booking message above within 30 minutes.`
+            : `${interaction.user.username} has booked **${booking.position}** ${getBookingWindowDisplay(booking)} and tagged you.`
         }]
       });
     } catch (err) {
@@ -983,8 +1001,8 @@ function createInteractionHandlers({
 
     await interaction.editReply({
       content: booking.mentorRequired
-        ? `\u2705 Booking for ${booking.position} on ${booking.date} at ${booking.start} has been sent to your mentor. They have 30 minutes to approve with ${THUMBS_UP}.`
-        : `\u2705 Booking for ${booking.position} on ${booking.date} at ${booking.start} has been sent to your mentor.`,
+        ? `\u2705 Booking for ${booking.position} ${getBookingWindowDisplay(booking)} has been sent to your mentor. They have 30 minutes to approve with ${THUMBS_UP}.`
+        : `\u2705 Booking for ${booking.position} ${getBookingWindowDisplay(booking)} has been sent to your mentor.`,
       components: []
     });
   }

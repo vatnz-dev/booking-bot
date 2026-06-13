@@ -11,6 +11,7 @@ VATNZ ATC Booking Bot is a Discord bot for controller booking, mentoring workflo
 - Fetch VATNZ events from the official calendar feed and create event threads.
 - Automatically create Christchurch Control event threads based on the event name, including the current VATNZ feed typo `Chrsitchurch Control`.
 - Post event coverage notifications in the booking/events channel 1 hour before event start.
+- Render booking and event times with Discord timestamps so users see local times.
 - Delete event threads 1 hour after the event ends.
 - Move overlapping bookings into event threads by reposting the booking embed, deleting the original, and updating stored message IDs.
 - Check expected previous-week StatSim traffic with `/expectedtraffic`.
@@ -100,6 +101,7 @@ The bot checks the VATNZ calendar feed on startup and every 5 minutes.
 - Christchurch Control events are created automatically by matching the VATNZ event name, not by checking NZCH positions.
 - Other events show Create Thread and Decline buttons for staff.
 - Event threads are public threads under the booking channel.
+- Event embeds use Discord timestamps for start/end times, so controllers outside NZ see their local time.
 - 1 hour before an event starts, the bot posts a coverage embed in the booking/events channel and pings `EVENT_NOTIFICATIONS_ROLE_ID` if configured.
 - The coverage embed lists booked airport positions, enroute/control positions, extensions, and the event start timestamp.
 - The coverage embed is deleted when the event finishes.

@@ -1,10 +1,12 @@
 const { DateTime } = require('luxon');
 
+const NZ_ZONE = 'Pacific/Auckland';
+
 function parseDdMm(dateStr) {
   if (!/^\d{2}\/\d{2}$/.test(String(dateStr))) return null;
   const [day, month] = String(dateStr).split('/').map(Number);
   if (month < 1 || month > 12) return null;
-  const check = DateTime.fromObject({ year: DateTime.now().setZone('Pacific/Auckland').year, month, day }, { zone: 'Pacific/Auckland' });
+  const check = DateTime.fromObject({ year: DateTime.now().setZone(NZ_ZONE).year, month, day }, { zone: NZ_ZONE });
   if (!check.isValid) return null;
   return { day, month };
 }
@@ -25,7 +27,7 @@ function buildNzDateTime(dateStr, timeStr, year) {
 
   const value = DateTime.fromObject(
     { year, month: date.month, day: date.day, hour: time.hour, minute: time.minute },
-    { zone: 'Pacific/Auckland' }
+    { zone: NZ_ZONE }
   );
 
   return value.isValid ? value : null;
@@ -38,6 +40,72 @@ function getBookingIntervalNz(booking, year) {
   return { startNz, endNz };
 }
 
+function getStoredUtcDateTime(value) {
+  const parsed = DateTime.fromISO(String(value || ''), { zone: 'utc' });
+  return parsed.isValid ? parsed.toUTC() : null;
+}
+
+function getBookingDisplayInterval(booking, referenceYear = null) {
+  const storedStartUtc = getStoredUtcDateTime(booking?.startUtc);
+  const storedEndUtc = getStoredUtcDateTime(booking?.endUtc);
+  if (storedStartUtc && storedEndUtc) {
+    return {
+      startUtc: storedStartUtc,
+      endUtc: storedEndUtc,
+      startNz: storedStartUtc.setZone(NZ_ZONE),
+      endNz: storedEndUtc.setZone(NZ_ZONE)
+    };
+  }
+
+  const nowNz = DateTime.now().setZone(NZ_ZONE);
+  const year = referenceYear || nowNz.year;
+  let startNz = buildNzDateTime(booking?.date, booking?.start, year);
+  let endNz = buildNzDateTime(booking?.date, booking?.end, year);
+  if (!startNz || !endNz) return null;
+
+  if (endNz <= startNz) {
+    endNz = endNz.plus({ days: 1 });
+  }
+
+  if (endNz < nowNz.minus({ hours: 1 })) {
+    startNz = startNz.plus({ years: 1 });
+    endNz = endNz.plus({ years: 1 });
+  }
+
+  return {
+    startUtc: startNz.toUTC(),
+    endUtc: endNz.toUTC(),
+    startNz,
+    endNz
+  };
+}
+
+function toDiscordTimestamp(dateTime, style = 'f') {
+  if (!dateTime?.isValid) return null;
+  return `<t:${Math.floor(dateTime.toUTC().toSeconds())}:${style}>`;
+}
+
+function formatBookingDateForDiscord(booking) {
+  const interval = getBookingDisplayInterval(booking);
+  return interval ? toDiscordTimestamp(interval.startUtc, 'D') : null;
+}
+
+function formatBookingStartForDiscord(booking) {
+  const interval = getBookingDisplayInterval(booking);
+  return interval ? toDiscordTimestamp(interval.startUtc, 't') : null;
+}
+
+function formatBookingEndForDiscord(booking) {
+  const interval = getBookingDisplayInterval(booking);
+  return interval ? toDiscordTimestamp(interval.endUtc, 't') : null;
+}
+
+function formatBookingWindowForDiscord(booking) {
+  const interval = getBookingDisplayInterval(booking);
+  if (!interval) return null;
+  return `${toDiscordTimestamp(interval.startUtc, 'F')} to ${toDiscordTimestamp(interval.endUtc, 'F')}`;
+}
+
 function getEventDateTimes(eventData) {
   const startUtc = DateTime.fromISO(eventData?.startUtcISO || eventData?.start, { zone: 'utc' });
   const endUtc = DateTime.fromISO(eventData?.endUtcISO || eventData?.end, { zone: 'utc' });
@@ -45,8 +113,8 @@ function getEventDateTimes(eventData) {
   return {
     startUtc,
     endUtc,
-    startNz: startUtc.setZone('Pacific/Auckland'),
-    endNz: endUtc.setZone('Pacific/Auckland')
+    startNz: startUtc.setZone(NZ_ZONE),
+    endNz: endUtc.setZone(NZ_ZONE)
   };
 }
 
@@ -63,11 +131,11 @@ function getPreviousWeekNZ(dateStr, startHHMM = '0000') {
   const hhmm = String(startHHMM).padStart(4, '0');
   const hour = Number(hhmm.slice(0, 2));
   const minute = Number(hhmm.slice(2));
-  const nowNZ = DateTime.now().setZone('Pacific/Auckland');
+  const nowNZ = DateTime.now().setZone(NZ_ZONE);
 
   let bookingDate = DateTime.fromObject(
     { year: nowNZ.year, month, day, hour, minute },
-    { zone: 'Pacific/Auckland' }
+    { zone: NZ_ZONE }
   );
 
   if (!bookingDate.isValid) {
@@ -98,11 +166,11 @@ function buildUtcWindowFromNz(date, start = '0000', end = '2359') {
 
   const fromNz = DateTime.fromObject(
     { year, month, day, hour: startHour, minute: startMinute },
-    { zone: 'Pacific/Auckland' }
+    { zone: NZ_ZONE }
   );
   const toNz = DateTime.fromObject(
     { year, month, day, hour: endHour, minute: endMinute },
-    { zone: 'Pacific/Auckland' }
+    { zone: NZ_ZONE }
   );
 
   if (!fromNz.isValid || !toNz.isValid) {
@@ -117,27 +185,34 @@ function buildUtcWindowFromNz(date, start = '0000', end = '2359') {
 
 function convertToUTC(dateStr, timeStr) {
   const [day, month] = dateStr.split('/').map(Number);
-  let year = new Date().getFullYear();
+  let year = DateTime.now().setZone(NZ_ZONE).year;
 
   const hours = timeStr.slice(0, 2);
   const minutes = timeStr.slice(2);
 
-  let nzDate = DateTime.fromISO(`${year}-${month}-${day}T${hours}:${minutes}:00`).setZone('Pacific/Auckland');
-  const nowNZ = DateTime.now().setZone('Pacific/Auckland');
+  let nzDate = DateTime.fromObject({ year, month, day, hour: Number(hours), minute: Number(minutes) }, { zone: NZ_ZONE });
+  const nowNZ = DateTime.now().setZone(NZ_ZONE);
 
   if (nzDate < nowNZ) {
     nzDate = nzDate.plus({ years: 1 });
   }
 
-  return nzDate.toISO();
+  return nzDate.toUTC().toISO();
 }
 
 module.exports = {
   DateTime,
+  NZ_ZONE,
   parseDdMm,
   parseHhmm,
   buildNzDateTime,
   getBookingIntervalNz,
+  getBookingDisplayInterval,
+  toDiscordTimestamp,
+  formatBookingDateForDiscord,
+  formatBookingStartForDiscord,
+  formatBookingEndForDiscord,
+  formatBookingWindowForDiscord,
   getEventDateTimes,
   bookingOverlapsEvent,
   getPreviousWeekNZ,

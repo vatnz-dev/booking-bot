@@ -1,6 +1,11 @@
 const { EmbedBuilder } = require('discord.js');
 
 const { cleanEmbedValue } = require('../utils/format');
+const {
+  formatBookingDateForDiscord,
+  formatBookingEndForDiscord,
+  formatBookingStartForDiscord
+} = require('../utils/time');
 
 function formatAuditUser(userId, fallback = 'System') {
   return userId ? `<@${userId}> (${userId})` : fallback;
@@ -23,8 +28,13 @@ function createAuditLogger({ getLogChannel, getBookingMessageLink }) {
 
     if (booking) {
       addAuditField(embedFields, 'Position', booking.position, true);
-      addAuditField(embedFields, 'Date', booking.date, true);
-      addAuditField(embedFields, 'Time', `${String(booking.start).padStart(4, '0')}-${String(booking.end).padStart(4, '0')}`, true);
+      addAuditField(embedFields, 'Date', formatBookingDateForDiscord(booking) || booking.date, true);
+      addAuditField(
+        embedFields,
+        'Time',
+        `${formatBookingStartForDiscord(booking) || String(booking.start).padStart(4, '0')}-${formatBookingEndForDiscord(booking) || String(booking.end).padStart(4, '0')}`,
+        true
+      );
       addAuditField(embedFields, 'Channel', `<#${booking.channelId || process.env.CHANNEL_ID}>`, true);
       if (booking.threadId) addAuditField(embedFields, 'Thread', `<#${booking.threadId}>`, true);
       const link = getBookingMessageLink(booking);

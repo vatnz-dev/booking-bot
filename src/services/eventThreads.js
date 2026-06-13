@@ -19,7 +19,15 @@ const {
   sectorCodeMap
 } = require('../constants');
 const { cleanEmbedValue, summarizeError } = require('../utils/format');
-const { DateTime, bookingOverlapsEvent, getEventDateTimes } = require('../utils/time');
+const {
+  DateTime,
+  bookingOverlapsEvent,
+  formatBookingDateForDiscord,
+  formatBookingEndForDiscord,
+  formatBookingStartForDiscord,
+  getEventDateTimes,
+  toDiscordTimestamp
+} = require('../utils/time');
 
 function unfoldIcsLines(text) {
   const lines = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
@@ -120,11 +128,10 @@ function eventStateKey(uid) {
 function formatEventWindow(eventData) {
   const eventTimes = getEventDateTimes(eventData);
   if (!eventTimes) return 'Unknown time';
-  const sameDay = eventTimes.startNz.hasSame(eventTimes.endNz, 'day');
-  if (sameDay) {
-    return `${eventTimes.startNz.toFormat('dd LLL yyyy HH:mm')} ${eventTimes.startNz.offsetNameShort}-${eventTimes.endNz.toFormat('HH:mm')} ${eventTimes.endNz.offsetNameShort}`;
-  }
-  return `${eventTimes.startNz.toFormat('dd LLL yyyy HH:mm')} ${eventTimes.startNz.offsetNameShort} to ${eventTimes.endNz.toFormat('dd LLL yyyy HH:mm')} ${eventTimes.endNz.offsetNameShort}`;
+  return [
+    `Starts ${toDiscordTimestamp(eventTimes.startUtc, 'F')} (${toDiscordTimestamp(eventTimes.startUtc, 'R')})`,
+    `Ends ${toDiscordTimestamp(eventTimes.endUtc, 'F')}`
+  ].join('\n');
 }
 
 function isEventWithinThreadWindow(eventData) {
@@ -168,10 +175,27 @@ function ordinalDay(day) {
   }
 }
 
+function eventTitleIncludesStartDate(eventTitle, eventTimes) {
+  if (!eventTimes) return false;
+  const normalized = String(eventTitle || '').toLowerCase().replace(/\s+/g, ' ');
+  const day = eventTimes.startNz.day;
+  const longMonth = eventTimes.startNz.toFormat('LLLL').toLowerCase();
+  const shortMonth = eventTimes.startNz.toFormat('LLL').toLowerCase();
+  const ordinal = ordinalDay(day).toLowerCase();
+  const needles = [
+    `${ordinal} ${longMonth}`,
+    `${day} ${longMonth}`,
+    `${ordinal} ${shortMonth}`,
+    `${day} ${shortMonth}`
+  ];
+  return needles.some(needle => normalized.includes(needle));
+}
+
 function buildEventThreadName(eventData) {
   const eventTimes = getEventDateTimes(eventData);
   const eventTitle = normalizeEventTitleForThreadName(eventData.title);
   const suffix = eventTimes ? `${ordinalDay(eventTimes.startNz.day)} ${eventTimes.startNz.toFormat('LLLL')}` : 'event';
+  if (eventTitleIncludesStartDate(eventTitle, eventTimes)) return eventTitle.slice(0, 100);
   return `${eventTitle} - ${suffix}`.slice(0, 100);
 }
 
@@ -195,7 +219,7 @@ function buildEventEmbed(eventData, title = 'VATNZ Event') {
 }
 
 function getDiscordTimestamp(dateTime, style = 'F') {
-  return `<t:${Math.floor(dateTime.toSeconds())}:${style}>`;
+  return toDiscordTimestamp(dateTime, style);
 }
 
 function getAirportPositionParts(position) {
@@ -237,13 +261,17 @@ function createEventThreadService({
   }
 
   function buildBookingEmbedFromRecord(booking, ownerId) {
+    const dateValue = formatBookingDateForDiscord(booking) || booking.date;
+    const startValue = formatBookingStartForDiscord(booking) || String(booking.start);
+    const endValue = formatBookingEndForDiscord(booking) || String(booking.end);
+
     const embed = new EmbedBuilder()
       .setColor('#000000')
       .setTitle(booking.position || 'Booking')
       .addFields(
-        { name: 'Date', value: cleanEmbedValue(booking.date), inline: false },
-        { name: 'Start', value: cleanEmbedValue(String(booking.start)), inline: true },
-        { name: 'End', value: cleanEmbedValue(String(booking.end)), inline: true },
+        { name: 'Date', value: cleanEmbedValue(dateValue), inline: false },
+        { name: 'Start', value: cleanEmbedValue(startValue), inline: true },
+        { name: 'End', value: cleanEmbedValue(endValue), inline: true },
         { name: 'Controller', value: `<@${ownerId}>`, inline: false }
       )
       .setTimestamp();
@@ -267,6 +295,17 @@ function createEventThreadService({
       });
     }
     return embed;
+  }
+
+  async function ensureEventThreadName(thread, eventData) {
+    const desiredName = buildEventThreadName(eventData);
+    if (!thread?.setName || thread.name === desiredName) return;
+
+    try {
+      await thread.setName(desiredName, `VATNZ event title update for ${eventData.title}`);
+    } catch (err) {
+      console.warn(`Could not update event thread name ${thread.id}:`, err?.message || err);
+    }
   }
 
   async function updateEventPromptMessage(state, content) {
@@ -366,7 +405,7 @@ function createEventThreadService({
     const eventTimes = getEventDateTimes(eventData);
     const coverage = buildCoverageLines(getEventCoverage(eventData));
     const startValue = eventTimes
-      ? `${getDiscordTimestamp(eventTimes.startUtc, 'F')} (${getDiscordTimestamp(eventTimes.startUtc, 'R')})`
+      ? `${toDiscordTimestamp(eventTimes.startUtc, 'F')} (${toDiscordTimestamp(eventTimes.startUtc, 'R')})`
       : 'Unknown start time';
 
     const embed = new EmbedBuilder()
@@ -507,9 +546,11 @@ function createEventThreadService({
         const oldMessageId = booking.messageId;
         const oldChannelId = booking.channelId || process.env.CHANNEL_ID;
         const oldMessage = await fetchBookingMessage(booking);
-        const embeds = oldMessage?.embeds?.length
-          ? oldMessage.embeds.map(embed => EmbedBuilder.from(embed))
-          : [buildBookingEmbedFromRecord(booking, ownerId)];
+        const bookingEmbed = buildBookingEmbedFromRecord(booking, ownerId);
+        const oldEmbed = oldMessage?.embeds?.[0];
+        if (oldEmbed?.thumbnail?.url) bookingEmbed.setThumbnail(oldEmbed.thumbnail.url);
+        if (oldEmbed?.footer?.text) bookingEmbed.setFooter({ text: oldEmbed.footer.text });
+        const embeds = [bookingEmbed];
 
         const newMessage = await thread.send({ embeds });
         if (booking.mentorRequired && booking.mentorId && !booking.mentorApproved) {
@@ -571,7 +612,10 @@ function createEventThreadService({
     const existing = getEventThreadState(eventData.uid);
     if (existing?.status === 'created' && existing.threadId) {
       const existingThread = await fetchDiscordChannel(existing.threadId, 'event thread');
-      if (existingThread) return { thread: existingThread, moved: [], alreadyCreated: true };
+      if (existingThread) {
+        await ensureEventThreadName(existingThread, eventData);
+        return { thread: existingThread, moved: [], alreadyCreated: true };
+      }
     }
 
     const bookingChannel = await getBookingChannel();
@@ -688,7 +732,7 @@ function createEventThreadService({
           { name: 'Event', value: state.event.title, inline: false },
           { name: 'Time', value: formatEventWindow(state.event), inline: false },
           { name: 'Thread ID', value: state.threadId, inline: true },
-          { name: 'Delete After', value: deleteAfter.toFormat('dd LLL yyyy HH:mm ZZZZ'), inline: true }
+          { name: 'Delete After', value: toDiscordTimestamp(deleteAfter, 'F'), inline: true }
         ],
         color: deleted ? '#D9534F' : '#FF9900'
       });
@@ -766,7 +810,10 @@ function createEventThreadService({
       if (existing?.status === 'created' && existing.threadId) {
         setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
         const thread = await fetchDiscordChannel(existing.threadId, 'event thread');
-        if (thread) await moveBookingsIntoEventThread(eventData, thread);
+        if (thread) {
+          await ensureEventThreadName(thread, eventData);
+          await moveBookingsIntoEventThread(eventData, thread);
+        }
         continue;
       }
 
@@ -828,6 +875,7 @@ module.exports = {
   isChristchurchControlEvent,
   normalizeEventTitleForThreadName,
   ordinalDay,
+  eventTitleIncludesStartDate,
   buildEventThreadName,
   buildEventEmbed,
   getDiscordTimestamp
