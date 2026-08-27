@@ -17,7 +17,7 @@ VATNZ ATC Booking Bot is a Discord bot for controller booking, mentoring workflo
 - Render booking and event times with Discord timestamps so users see local times.
 - Delete event threads 1 hour after the event ends.
 - Move overlapping bookings into event threads by reposting the booking embed, deleting the original, and updating stored message IDs.
-- Check expected previous-week StatSim traffic with `/expectedtraffic`.
+- Check expected previous-week StatSim traffic with `/expectedtraffic`, including prior-year weekday fallback when StatSim has no movements for the requested window.
 - Apply current VATNZ solo/S1 endorsements to remove mentor requirements for matching positions.
 - Warn known booking users 30 days, 1 day, and on the day a dated endorsement expires.
 
@@ -44,6 +44,8 @@ EVENT_CALENDAR_URL=https://www.vatnz.net/events/calendar/vatnz-lite.ics
 VATNZ_POSITIONS_URL=https://www.vatnz.net/airspace/positions/
 SOLO_ENDORSEMENTS_URL=https://www.vatnz.net/controllers/endorsements/approved-solo-endorsements/
 S1_SOLO_ENDORSEMENTS_URL=https://www.vatnz.net/controllers/endorsements/list-s1-holders-approved-connect-under-622-s1-tower-trainee-policy/
+STATSIM_TIMEOUT_MS=15000
+STATSIM_ZERO_FALLBACK_YEARS=3
 ```
 
 Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env`. Never commit `.env` or paste real server IDs into this README.
@@ -62,7 +64,7 @@ Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env
 - `src/services/eventThreads.js` - VATNZ event feed parsing and event-thread lifecycle.
 - `src/services/positions.js` - VATNZ position lookup, validation, and booking eligibility.
 - `src/services/soloEndorsements.js` - VATNZ solo/S1 endorsement lookup, mentor overrides, and expiry warnings.
-- `src/services/traffic.js` - Previous-week StatSim traffic lookup.
+- `src/services/traffic.js` - Previous-week StatSim traffic lookup and prior-year fallback handling.
 - `src/services/vatsim.js` - VATSIM Discord account lookup.
 - `src/utils/format.js` - Shared formatting helpers.
 - `src/utils/time.js` - NZ/UTC date and time helpers.

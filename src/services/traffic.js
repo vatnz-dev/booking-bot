@@ -2,9 +2,12 @@ const cheerio = require('cheerio');
 const axios = require('axios');
 
 const { sectorAerodromeMap, sectorCodeMap } = require('../constants');
-const { buildUtcWindowFromNz, hhmmToClock } = require('../utils/time');
+const { DateTime, NZ_ZONE, buildUtcWindowFromNz, hhmmToClock } = require('../utils/time');
 
 const trafficCache = new Map();
+const STATSIM_BASE_URL = 'https://statsim.net';
+const DEFAULT_STATSIM_TIMEOUT_MS = 15000;
+const DEFAULT_ZERO_FALLBACK_YEARS = 3;
 
 function resolveAerodromes(position) {
   if (sectorAerodromeMap[position]) return sectorAerodromeMap[position];
@@ -23,17 +26,156 @@ async function getTrafficData(icao, date, start = '0000', end = '2359') {
   const key = `${icao}_${fromUtc}_${toUtc}`;
   if (trafficCache.has(key)) return trafficCache.get(key);
 
-  const url = `https://statsim.net/events/custom/${encodeURIComponent(fromUtc)}/${encodeURIComponent(toUtc)}/${icao}`;
-  const { data: html } = await axios.get(url);
-  const $ = cheerio.load(html);
-  const text = $('body').text();
+  const url = `${STATSIM_BASE_URL}/events/custom/${encodeURIComponent(fromUtc)}/${encodeURIComponent(toUtc)}/${encodeURIComponent(icao)}`;
+  const { data: html } = await axios.get(url, {
+    timeout: getStatsimTimeoutMs(),
+    headers: {
+      'User-Agent': 'VATNZ-Booking-Bot/1.0 (+https://github.com/vatnz-dev/booking-bot)'
+    }
+  });
 
-  const arrivals = parseInt(text.match(/Arrivals:\s*(\d+)/)?.[1] || 0);
-  const departures = parseInt(text.match(/Departures:\s*(\d+)/)?.[1] || 0);
-  const result = { icao, arrivals, departures };
+  const result = {
+    icao,
+    ...parseStatsimTrafficHtml(html, icao),
+    statsimDate: date,
+    requestedDate: date
+  };
 
   trafficCache.set(key, result);
   return result;
+}
+
+function getStatsimTimeoutMs() {
+  const configured = Number.parseInt(process.env.STATSIM_TIMEOUT_MS || '', 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_STATSIM_TIMEOUT_MS;
+}
+
+function getZeroFallbackYears() {
+  const configured = Number.parseInt(process.env.STATSIM_ZERO_FALLBACK_YEARS || '', 10);
+  if (!Number.isFinite(configured)) return DEFAULT_ZERO_FALLBACK_YEARS;
+  return Math.max(0, Math.min(configured, 10));
+}
+
+function toCount(value) {
+  const count = Number.parseInt(String(value || '0').replace(/,/g, ''), 10);
+  return Number.isFinite(count) ? count : 0;
+}
+
+function normaliseText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function parseStatsimChartData(html, icao) {
+  const chartMatch = String(html).match(/var\s+airportCharts\s*=\s*(\[[\s\S]*?\]);/i);
+  if (!chartMatch) return null;
+
+  try {
+    const charts = JSON.parse(chartMatch[1]);
+    const airport = charts.find(chart => String(chart?.icao || '').toUpperCase() === icao);
+    if (!airport) return null;
+
+    const departures = Array.isArray(airport.departures)
+      ? airport.departures.reduce((sum, point) => sum + toCount(point?.y), 0)
+      : 0;
+    const arrivals = Array.isArray(airport.arrivals)
+      ? airport.arrivals.reduce((sum, point) => sum + toCount(point?.y), 0)
+      : 0;
+
+    return { arrivals, departures };
+  } catch (err) {
+    console.warn(`Could not parse StatSim chart data for ${icao}:`, err?.message || err);
+    return null;
+  }
+}
+
+function parseStatsimCountText(html) {
+  const $ = cheerio.load(html);
+  const text = normaliseText($('body').text());
+  const departures = text.match(/Departures:\s*([\d,]+)/i);
+  const arrivals = text.match(/Arrivals:\s*([\d,]+)/i);
+
+  if (!departures && !arrivals) return null;
+  return {
+    departures: toCount(departures?.[1]),
+    arrivals: toCount(arrivals?.[1])
+  };
+}
+
+function parseStatsimTrafficHtml(html, icao) {
+  const countTraffic = parseStatsimCountText(html);
+  if (countTraffic) return countTraffic;
+
+  const chartTraffic = parseStatsimChartData(html, icao);
+  if (chartTraffic) return chartTraffic;
+
+  throw new Error(`Could not find StatSim arrivals/departures for ${icao}`);
+}
+
+function getTrafficDateCandidates(date) {
+  const baseDate = DateTime.fromISO(String(date), { zone: NZ_ZONE });
+  if (!baseDate.isValid) return [date];
+
+  const dates = [baseDate.toFormat('yyyy-MM-dd')];
+  const fallbackYears = getZeroFallbackYears();
+  for (let year = 1; year <= fallbackYears; year += 1) {
+    dates.push(baseDate.minus({ weeks: year * 52 }).toFormat('yyyy-MM-dd'));
+  }
+
+  return [...new Set(dates)];
+}
+
+async function getTrafficDataSet(aerodromes, date, start = '0000', end = '2359') {
+  const results = await Promise.all(aerodromes.map(icao =>
+    getTrafficData(icao, date, start, end)
+      .catch(err => ({
+        icao,
+        arrivals: 0,
+        departures: 0,
+        error: err?.message || String(err),
+        statsimDate: date,
+        requestedDate: date
+      }))
+  ));
+
+  const failures = results.filter(result => result.error);
+  const total = results.reduce((sum, result) => sum + result.arrivals + result.departures, 0);
+
+  if (failures.length === results.length && results.length > 0) {
+    throw new Error(`All StatSim lookups failed for ${date}: ${failures.map(result => `${result.icao}: ${result.error}`).join('; ')}`);
+  }
+
+  return { date, results, total, failures };
+}
+
+async function getBestTrafficDataSet(aerodromes, date, start = '0000', end = '2359') {
+  const candidates = getTrafficDateCandidates(date);
+  let lastDataSet = null;
+
+  for (const candidateDate of candidates) {
+    const dataSet = await getTrafficDataSet(aerodromes, candidateDate, start, end);
+    lastDataSet = dataSet;
+    if (dataSet.total > 0 || candidates.length === 1) {
+      return {
+        ...dataSet,
+        requestedDate: date,
+        usedFallback: candidateDate !== date
+      };
+    }
+  }
+
+  return {
+    ...lastDataSet,
+    requestedDate: date,
+    usedFallback: lastDataSet?.date !== date
+  };
+}
+
+function buildTrafficHeader(date, requestedDate, start, end) {
+  let out = `\u{1F4CA} **Expected Traffic (based on ${date} ${hhmmToClock(start)}-${hhmmToClock(end)})**\n`;
+  if (date !== requestedDate) {
+    out += `_StatSim returned no movements for ${requestedDate}, so using the equivalent prior-year weekday ${date}._\n`;
+  }
+  return out;
 }
 
 async function getSectorTraffic(sector, date, start = '0000', end = '2359') {
@@ -63,14 +205,10 @@ async function getSectorTraffic(sector, date, start = '0000', end = '2359') {
 
 async function formatAerodromeTraffic(position, date, start = '0000', end = '2359') {
   const aerodromes = resolveAerodromes(position);
+  const dataSet = await getBestTrafficDataSet(aerodromes, date, start, end);
+  const results = dataSet.results;
 
-  const promises = aerodromes.map(icao =>
-    getTrafficData(icao, date, start, end).catch(() => ({ icao, arrivals: 0, departures: 0 }))
-  );
-
-  const results = await Promise.all(promises);
-
-  let out = `\u{1F4CA} **Expected Traffic (based on ${date} ${hhmmToClock(start)}-${hhmmToClock(end)})**\n`;
+  let out = buildTrafficHeader(dataSet.date, dataSet.requestedDate, start, end);
 
   for (const r of results) {
     out += `\u2022 **${r.icao}** \u2014 ${r.arrivals} arrivals / ${r.departures} departures\n`;
@@ -80,9 +218,23 @@ async function formatAerodromeTraffic(position, date, start = '0000', end = '235
 }
 
 async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') {
-  let out = `\u{1F4CA} **Expected Traffic (based on ${date} ${hhmmToClock(start)}-${hhmmToClock(end)})**\n`;
+  const aerodromes = [...new Set(sectors.flatMap(sector => sectorAerodromeMap[sector] || []))];
+  const dataSet = await getBestTrafficDataSet(aerodromes, date, start, end);
+  const trafficByIcao = new Map(dataSet.results.map(result => [result.icao, result]));
+
+  let out = buildTrafficHeader(dataSet.date, dataSet.requestedDate, start, end);
   for (const sector of sectors) {
-    const t = await getSectorTraffic(sector, date, start, end);
+    const aerodromeTraffic = (sectorAerodromeMap[sector] || []).map(icao =>
+      trafficByIcao.get(icao) || { arrivals: 0, departures: 0 }
+    );
+    const arrivals = aerodromeTraffic.reduce((sum, result) => sum + result.arrivals, 0);
+    const departures = aerodromeTraffic.reduce((sum, result) => sum + result.departures, 0);
+    const t = {
+      sectorCode: sectorCodeMap[sector] || sector,
+      arrivals,
+      departures,
+      total: arrivals + departures
+    };
     out += `\u2022 **${t.sectorCode}** \u2014 ${t.total} movements (${t.arrivals} arrivals / ${t.departures} departures)\n`;
   }
   return out;
