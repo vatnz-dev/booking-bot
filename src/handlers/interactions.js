@@ -35,7 +35,14 @@ const {
   toDiscordTimestamp
 } = require('../utils/time');
 const { cleanEmbedValue } = require('../utils/format');
-const { resolveAerodromes, formatAerodromeTraffic, formatSectorTraffic } = require('../services/traffic');
+const {
+  resolveAerodromes,
+  formatAerodromeTraffic,
+  formatSectorTraffic,
+  getStatsimState,
+  setStatsimEnabled,
+  STATSIM_DISABLED_MESSAGE
+} = require('../services/traffic');
 const { validateVatnzPosition, validateVatnzEventPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
 const {
@@ -288,6 +295,64 @@ function createInteractionHandlers({
       console.error('Expected traffic lookup failed:', err);
       await interaction.editReply({ content: 'Could not fetch expected traffic right now. Please try again later.' });
     }
+  }
+
+  async function handleStatsim(interaction) {
+    await interaction.deferReply({ ephemeral: true });
+
+    if (!isStaffMember(interaction.member)) {
+      await interaction.editReply({ content: 'Only staff can change StatSim lookup status.' });
+      return;
+    }
+
+    const mode = interaction.options.getString('mode');
+    const reason = interaction.options.getString('reason')?.trim() || null;
+
+    if (mode === 'status') {
+      const state = getStatsimState();
+      const status = state.enabled ? 'enabled' : 'disabled';
+      const details = [
+        `StatSim traffic lookups are currently **${status}**.`,
+        `Source: ${state.source}.`
+      ];
+
+      if (!state.enabled) {
+        details.push(`Users will see: ${STATSIM_DISABLED_MESSAGE}`);
+      }
+      if (state.reason) {
+        details.push(`Reason: ${state.reason}`);
+      }
+      if (state.updatedBy) {
+        details.push(`Last changed by: <@${state.updatedBy}>.`);
+      }
+
+      await interaction.editReply({ content: details.join('\n') });
+      return;
+    }
+
+    if (!['enable', 'disable'].includes(mode)) {
+      await interaction.editReply({ content: 'Mode must be status, enable, or disable.' });
+      return;
+    }
+
+    const enabled = mode === 'enable';
+    const state = setStatsimEnabled(enabled, { actorId: interaction.user.id, reason });
+
+    await sendAuditLog({
+      action: state.enabled ? 'StatSim Enabled' : 'StatSim Disabled',
+      actorId: interaction.user.id,
+      reason: reason || (state.enabled ? 'StatSim lookups enabled' : 'StatSim lookups disabled'),
+      fields: state.enabled
+        ? []
+        : [{ name: 'User-facing message', value: STATSIM_DISABLED_MESSAGE, inline: false }],
+      color: state.enabled ? '#3BA55D' : '#D9534F'
+    });
+
+    await interaction.editReply({
+      content: state.enabled
+        ? 'StatSim traffic lookups are now **enabled**.'
+        : `StatSim traffic lookups are now **disabled**.\nUsers will see: ${STATSIM_DISABLED_MESSAGE}`
+    });
   }
 
   async function handleDeleteBookingSelect(interaction) {
@@ -1198,6 +1263,9 @@ function createInteractionHandlers({
             case 'openeventposition':
               await handleOpenEventPosition(interaction);
               break;
+            case 'statsim':
+              await handleStatsim(interaction);
+              break;
             case 'viewbookings':
               await handleViewBookings(interaction);
               break;
@@ -1266,6 +1334,7 @@ function createInteractionHandlers({
     handlePlan,
     handleViewBookings,
     handleOpenEventPosition,
+    handleStatsim,
     handleExtendSectorSelect,
     handleCloseEventPosition,
     handleMentorBookingSelect,

@@ -1,6 +1,7 @@
 const cheerio = require('cheerio');
 const axios = require('axios');
 
+const { settings } = require('../data/databases');
 const { sectorAerodromeMap, sectorCodeMap } = require('../constants');
 const { DateTime, NZ_ZONE, buildUtcWindowFromNz, hhmmToClock } = require('../utils/time');
 
@@ -8,6 +9,8 @@ const trafficCache = new Map();
 const STATSIM_BASE_URL = 'https://statsim.net';
 const DEFAULT_STATSIM_TIMEOUT_MS = 15000;
 const DEFAULT_ZERO_FALLBACK_YEARS = 3;
+const STATSIM_SETTING_KEY = 'statsim';
+const STATSIM_DISABLED_MESSAGE = 'No StatSim data available at the moment due to server/bot errors.';
 
 function resolveAerodromes(position) {
   if (sectorAerodromeMap[position]) return sectorAerodromeMap[position];
@@ -17,6 +20,12 @@ function resolveAerodromes(position) {
 }
 
 async function getTrafficData(icao, date, start = '0000', end = '2359') {
+  if (!isStatsimEnabled()) {
+    const err = new Error(STATSIM_DISABLED_MESSAGE);
+    err.code = 'STATSIM_DISABLED';
+    throw err;
+  }
+
   const utcWindow = buildUtcWindowFromNz(date, start, end);
   if (!utcWindow) {
     return { icao, arrivals: 0, departures: 0 };
@@ -48,6 +57,56 @@ async function getTrafficData(icao, date, start = '0000', end = '2359') {
 function getStatsimTimeoutMs() {
   const configured = Number.parseInt(process.env.STATSIM_TIMEOUT_MS || '', 10);
   return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_STATSIM_TIMEOUT_MS;
+}
+
+function parseBoolean(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const normalised = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on', 'enable', 'enabled'].includes(normalised)) return true;
+  if (['false', '0', 'no', 'n', 'off', 'disable', 'disabled'].includes(normalised)) return false;
+  return fallback;
+}
+
+function getEnvStatsimEnabled() {
+  return parseBoolean(process.env.STATSIM_ENABLED, true);
+}
+
+function getStatsimState() {
+  const stored = settings.get(STATSIM_SETTING_KEY);
+  if (stored && typeof stored === 'object' && typeof stored.enabled === 'boolean') {
+    return {
+      enabled: stored.enabled,
+      reason: stored.reason || null,
+      updatedAt: stored.updatedAt || null,
+      updatedBy: stored.updatedBy || null,
+      source: 'settings'
+    };
+  }
+
+  return {
+    enabled: getEnvStatsimEnabled(),
+    reason: null,
+    updatedAt: null,
+    updatedBy: null,
+    source: 'env'
+  };
+}
+
+function isStatsimEnabled() {
+  return getStatsimState().enabled;
+}
+
+function setStatsimEnabled(enabled, { actorId = null, reason = null } = {}) {
+  const state = {
+    enabled: Boolean(enabled),
+    reason: reason ? String(reason).trim().slice(0, 250) : null,
+    updatedAt: new Date().toISOString(),
+    updatedBy: actorId ? String(actorId) : null
+  };
+
+  settings.set(STATSIM_SETTING_KEY, state);
+  if (state.enabled) trafficCache.clear();
+  return getStatsimState();
 }
 
 function getZeroFallbackYears() {
@@ -179,6 +238,12 @@ function buildTrafficHeader(date, requestedDate, start, end) {
 }
 
 async function getSectorTraffic(sector, date, start = '0000', end = '2359') {
+  if (!isStatsimEnabled()) {
+    const err = new Error(STATSIM_DISABLED_MESSAGE);
+    err.code = 'STATSIM_DISABLED';
+    throw err;
+  }
+
   const aerodromes = sectorAerodromeMap[sector] || [];
 
   const promises = aerodromes.map(icao =>
@@ -204,8 +269,16 @@ async function getSectorTraffic(sector, date, start = '0000', end = '2359') {
 }
 
 async function formatAerodromeTraffic(position, date, start = '0000', end = '2359') {
+  if (!isStatsimEnabled()) return STATSIM_DISABLED_MESSAGE;
+
   const aerodromes = resolveAerodromes(position);
-  const dataSet = await getBestTrafficDataSet(aerodromes, date, start, end);
+  let dataSet;
+  try {
+    dataSet = await getBestTrafficDataSet(aerodromes, date, start, end);
+  } catch (err) {
+    console.warn('StatSim aerodrome traffic lookup failed:', err?.message || err);
+    return STATSIM_DISABLED_MESSAGE;
+  }
   const results = dataSet.results;
 
   let out = buildTrafficHeader(dataSet.date, dataSet.requestedDate, start, end);
@@ -218,8 +291,16 @@ async function formatAerodromeTraffic(position, date, start = '0000', end = '235
 }
 
 async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') {
+  if (!isStatsimEnabled()) return STATSIM_DISABLED_MESSAGE;
+
   const aerodromes = [...new Set(sectors.flatMap(sector => sectorAerodromeMap[sector] || []))];
-  const dataSet = await getBestTrafficDataSet(aerodromes, date, start, end);
+  let dataSet;
+  try {
+    dataSet = await getBestTrafficDataSet(aerodromes, date, start, end);
+  } catch (err) {
+    console.warn('StatSim sector traffic lookup failed:', err?.message || err);
+    return STATSIM_DISABLED_MESSAGE;
+  }
   const trafficByIcao = new Map(dataSet.results.map(result => [result.icao, result]));
 
   let out = buildTrafficHeader(dataSet.date, dataSet.requestedDate, start, end);
@@ -242,6 +323,10 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
 
 module.exports = {
   resolveAerodromes,
+  getStatsimState,
+  isStatsimEnabled,
+  setStatsimEnabled,
+  STATSIM_DISABLED_MESSAGE,
   getTrafficData,
   getSectorTraffic,
   formatAerodromeTraffic,

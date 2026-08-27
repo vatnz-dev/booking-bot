@@ -57,6 +57,29 @@ module.exports = [
     ]
   },
   {
+    name: 'statsim',
+    description: 'Staff: enable, disable, or check StatSim traffic lookups.',
+    options: [
+      {
+        type: 3,
+        name: 'mode',
+        description: 'What to do with StatSim lookups.',
+        required: true,
+        choices: [
+          { name: 'status', value: 'status' },
+          { name: 'enable', value: 'enable' },
+          { name: 'disable', value: 'disable' }
+        ]
+      },
+      {
+        type: 3,
+        name: 'reason',
+        description: 'Optional staff note for why StatSim is being changed.',
+        required: false
+      }
+    ]
+  },
+  {
     name: 'openeventposition',
     description: 'Open event positions.',
     options: [

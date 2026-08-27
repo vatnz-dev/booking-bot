@@ -18,6 +18,7 @@ VATNZ ATC Booking Bot is a Discord bot for controller booking, mentoring workflo
 - Delete event threads 1 hour after the event ends.
 - Move overlapping bookings into event threads by reposting the booking embed, deleting the original, and updating stored message IDs.
 - Check expected previous-week StatSim traffic with `/expectedtraffic`, including prior-year weekday fallback when StatSim has no movements for the requested window.
+- Staff can disable or enable StatSim traffic lookups with `/statsim` when StatSim is down.
 - Apply current VATNZ solo/S1 endorsements to remove mentor requirements for matching positions.
 - Warn known booking users 30 days, 1 day, and on the day a dated endorsement expires.
 
@@ -44,6 +45,7 @@ EVENT_CALENDAR_URL=https://www.vatnz.net/events/calendar/vatnz-lite.ics
 VATNZ_POSITIONS_URL=https://www.vatnz.net/airspace/positions/
 SOLO_ENDORSEMENTS_URL=https://www.vatnz.net/controllers/endorsements/approved-solo-endorsements/
 S1_SOLO_ENDORSEMENTS_URL=https://www.vatnz.net/controllers/endorsements/list-s1-holders-approved-connect-under-622-s1-tower-trainee-policy/
+STATSIM_ENABLED=true
 STATSIM_TIMEOUT_MS=15000
 STATSIM_ZERO_FALLBACK_YEARS=3
 ```
@@ -98,11 +100,13 @@ npm.cmd start
 - `/deletebookings controller:@user` - Staff only; delete another controller's booking.
 - `/mentor mentor:@user` - Tag a mentor for a booking.
 - `/expectedtraffic position:NZCH_APP date:DD/MM start:HHMM end:HHMM` - Show expected previous-week traffic for the same NZ date/time window.
+- `/statsim mode:status|enable|disable reason:optional` - Staff only; toggle StatSim traffic lookups.
 - `/openeventposition` - Open an event-only position for a date.
 - `/closeeventposition` - Close an event-only position.
 
 Bookings shorter than 30 minutes are rejected.
 Booking reminders are sent by DM `BOOKING_REMINDER_MINUTES` minutes before start unless `BOOKING_REMINDERS_ENABLED=false`.
+StatSim starts enabled unless `STATSIM_ENABLED=false` is set. Runtime changes from `/statsim` are stored in `settings.json` and override the env default until changed again.
 
 ## Event Threads
 
@@ -132,6 +136,7 @@ These files are created locally and ignored by git:
 - `endorsementwarnings.json`
 - `messages.json`
 - `eventthreads.json`
+- `settings.json`
 - `node_modules/`
 
 The bot creates missing runtime JSON files automatically with empty objects. Demo versions live in `examples/`:
@@ -141,6 +146,7 @@ The bot creates missing runtime JSON files automatically with empty objects. Dem
 - `examples/endorsementwarnings.demo.json`
 - `examples/messages.demo.json`
 - `examples/eventthreads.demo.json`
+- `examples/settings.demo.json`
 
 Solo endorsement expiry warnings are sent to Discord users the bot can map to a VATSIM CID, currently users with bookings stored in `messages.json`.
 
@@ -156,6 +162,7 @@ Solo endorsement expiry warnings are sent to Discord users the bot can map to a 
    - Staff user deletes another controller's booking and the log channel receives an audit embed.
    - Mentor-required booking auto-deletes if no mentor is tagged or approval times out.
    - `/expectedtraffic NZCH_APP DD/MM HHMM HHMM` returns previous-week traffic.
+   - Staff `/statsim mode:disable` makes expected traffic replies say StatSim data is unavailable, and `/statsim mode:enable` restores lookups.
    - Christchurch Control event auto-creates a thread.
    - Non-Christchurch event prompt buttons work.
    - Matching bookings move into the event thread and remain deletable after moving.
