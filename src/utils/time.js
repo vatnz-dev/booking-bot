@@ -20,6 +20,13 @@ function parseHhmm(time) {
   return { raw, hour, minute };
 }
 
+function getDurationMinutes(startTime, endTime) {
+  const start = parseHhmm(startTime);
+  const end = parseHhmm(endTime);
+  if (!start || !end) return null;
+  return (end.hour * 60 + end.minute) - (start.hour * 60 + start.minute);
+}
+
 function buildNzDateTime(dateStr, timeStr, year) {
   const date = parseDdMm(dateStr);
   const time = parseHhmm(timeStr);
@@ -205,6 +212,7 @@ module.exports = {
   NZ_ZONE,
   parseDdMm,
   parseHhmm,
+  getDurationMinutes,
   buildNzDateTime,
   getBookingIntervalNz,
   getBookingDisplayInterval,

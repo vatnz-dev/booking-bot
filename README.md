@@ -5,6 +5,7 @@ VATNZ ATC Booking Bot is a Discord bot for controller booking, mentoring workflo
 ## Features
 
 - Book ATC sessions from Discord with controller rating and mentor checks.
+- Require booking sessions to be at least 30 minutes long.
 - View and delete bookings with `/viewbookings` and `/deletebookings`.
 - Staff can use `/deletebookings controller:@user` to delete another controller's booking.
 - Log booking creates, deletes, mentor actions, auto-deletes, event prompts, event thread creation, and event booking moves.
@@ -92,6 +93,8 @@ npm.cmd start
 - `/expectedtraffic position:NZCH_APP date:DD/MM start:HHMM end:HHMM` - Show expected previous-week traffic for the same NZ date/time window.
 - `/openeventposition` - Open an event-only position for a date.
 - `/closeeventposition` - Close an event-only position.
+
+Bookings shorter than 30 minutes are rejected.
 
 ## Event Threads
 

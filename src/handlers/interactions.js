@@ -11,6 +11,7 @@ const {
 
 const {
   FSS_ROLE_ID,
+  MIN_BOOKING_DURATION_MINUTES,
   THUMBS_UP,
   allExtendableSectors,
   autoInheritanceMap,
@@ -25,6 +26,7 @@ const {
   formatBookingStartForDiscord,
   formatBookingWindowForDiscord,
   getBookingDisplayInterval,
+  getDurationMinutes,
   getPreviousWeekNZ,
   parseDdMm,
   parseHhmm
@@ -274,6 +276,15 @@ function createInteractionHandlers({
       if (starts >= ends) {
         await i.editReply({
           content: '\u274C Start time must be before End time.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      const durationMinutes = getDurationMinutes(startRaw, endRaw);
+      if (durationMinutes === null || durationMinutes < MIN_BOOKING_DURATION_MINUTES) {
+        await i.editReply({
+          content: `\u274C Booking sessions must be at least ${MIN_BOOKING_DURATION_MINUTES} minutes long.`,
           ephemeral: true
         });
         return;
