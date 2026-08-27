@@ -57,14 +57,18 @@
     getBookingMessageLink: discordHelpers.getBookingMessageLink
   });
 
+  let eventThreadService;
+
   const bookingLifecycle = createBookingLifecycle({
     client,
     messages,
     fetchBookingMessage: discordHelpers.fetchBookingMessage,
-    sendAuditLog
+    getBookingMessageLink: discordHelpers.getBookingMessageLink,
+    sendAuditLog,
+    refreshEventCoverageNotificationsForBooking: (...args) => eventThreadService?.refreshEventCoverageNotificationsForBooking?.(...args)
   });
 
-  const eventThreadService = createEventThreadService({
+  eventThreadService = createEventThreadService({
     eventThreads,
     messages,
     fetchDiscordChannel: discordHelpers.fetchDiscordChannel,
@@ -74,7 +78,9 @@
     sendAuditLog,
     clearMentorTimers: bookingLifecycle.clearMentorTimers,
     clearExtensionSelectionTimer: bookingLifecycle.clearExtensionSelectionTimer,
+    clearBookingReminderTimer: bookingLifecycle.clearBookingReminderTimer,
     rescheduleMentorTimers: bookingLifecycle.rescheduleMentorTimers,
+    scheduleBookingReminder: bookingLifecycle.scheduleBookingReminder,
     isStaffMember
   });
 

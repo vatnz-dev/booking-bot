@@ -6,6 +6,8 @@ VATNZ ATC Booking Bot is a Discord bot for controller booking, mentoring workflo
 
 - Book ATC sessions from Discord with controller rating and mentor checks.
 - Require booking sessions to be at least 30 minutes long.
+- DM booking reminders before sessions start.
+- Explain booking conflicts with the conflicting controller and time window.
 - View and delete bookings with `/viewbookings` and `/deletebookings`.
 - Staff can use `/deletebookings controller:@user` to delete another controller's booking.
 - Log booking creates, deletes, mentor actions, auto-deletes, event prompts, event thread creation, and event booking moves.
@@ -36,6 +38,8 @@ CHANNEL_ID=your_booking_channel_id_here
 LOG_CHANNEL_ID=your_staff_log_channel_id_here
 STAFF_ROLE_ID=your_staff_role_id_here
 EVENT_NOTIFICATIONS_ROLE_ID=your_event_notifications_role_id_here
+BOOKING_REMINDERS_ENABLED=true
+BOOKING_REMINDER_MINUTES=30
 EVENT_CALENDAR_URL=https://www.vatnz.net/events/calendar/vatnz-lite.ics
 VATNZ_POSITIONS_URL=https://www.vatnz.net/airspace/positions/
 SOLO_ENDORSEMENTS_URL=https://www.vatnz.net/controllers/endorsements/approved-solo-endorsements/
@@ -87,6 +91,7 @@ npm.cmd start
 ## Commands
 
 - `/viewbookings` - View your current bookings.
+- `/myendorsements` - View your VATNZ solo/S1 endorsements and expiry status.
 - `/deletebookings` - Delete one of your bookings.
 - `/deletebookings controller:@user` - Staff only; delete another controller's booking.
 - `/mentor mentor:@user` - Tag a mentor for a booking.
@@ -95,6 +100,7 @@ npm.cmd start
 - `/closeeventposition` - Close an event-only position.
 
 Bookings shorter than 30 minutes are rejected.
+Booking reminders are sent by DM `BOOKING_REMINDER_MINUTES` minutes before start unless `BOOKING_REMINDERS_ENABLED=false`.
 
 ## Event Threads
 
@@ -107,6 +113,7 @@ The bot checks the VATNZ calendar feed on startup and every 5 minutes.
 - Event embeds use Discord timestamps for start/end times, so controllers outside NZ see their local time.
 - 1 hour before an event starts, the bot posts a coverage embed in the booking/events channel and pings `EVENT_NOTIFICATIONS_ROLE_ID` if configured.
 - The coverage embed lists booked airport positions, enroute/control positions, extensions, and the event start timestamp.
+- If bookings are created, deleted, auto-deleted, or extended after the coverage embed posts, the bot edits that existing embed.
 - The coverage embed is deleted when the event finishes.
 - Event thread names use the format `Christchurch Control - 13th May`.
 - Existing overlapping bookings are reposted into the thread, original messages are deleted, and `messages.json` is updated.

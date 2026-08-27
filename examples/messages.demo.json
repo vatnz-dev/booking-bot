@@ -16,6 +16,8 @@
       "mentorRequired": false,
       "mentorId": null,
       "mentorApproved": false,
+      "reminderMinutes": 30,
+      "reminderSentAt": null,
       "soloEndorsement": {
         "source": "solo",
         "scope": "NZCH_APP",

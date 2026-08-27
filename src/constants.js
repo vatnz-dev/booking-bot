@@ -1,20 +1,27 @@
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
 const EVENT_NOTIFICATIONS_ROLE_ID = process.env.EVENT_NOTIFICATIONS_ROLE_ID;
+const BOOKING_REMINDERS_ENABLED = String(process.env.BOOKING_REMINDERS_ENABLED || 'true').toLowerCase() !== 'false';
 const EVENT_CALENDAR_URL = process.env.EVENT_CALENDAR_URL || 'https://www.vatnz.net/events/calendar/vatnz-lite.ics';
 const VATNZ_POSITIONS_URL = process.env.VATNZ_POSITIONS_URL || 'https://www.vatnz.net/airspace/positions/';
 const SOLO_ENDORSEMENTS_URL = process.env.SOLO_ENDORSEMENTS_URL || 'https://www.vatnz.net/controllers/endorsements/approved-solo-endorsements/';
 const S1_SOLO_ENDORSEMENTS_URL = process.env.S1_SOLO_ENDORSEMENTS_URL || 'https://www.vatnz.net/controllers/endorsements/list-s1-holders-approved-connect-under-622-s1-tower-trainee-policy/';
 
+function readPositiveNumberEnv(name, fallback) {
+  const value = Number(process.env[name] || fallback);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 const EVENT_LOOKAHEAD_DAYS = 7;
 const ONE_HOUR_MS = 60 * 60 * 1000;
-const EVENT_CHECK_INTERVAL_MS = Number(process.env.EVENT_CHECK_INTERVAL_MS || 5 * 60 * 1000);
+const EVENT_CHECK_INTERVAL_MS = readPositiveNumberEnv('EVENT_CHECK_INTERVAL_MS', 5 * 60 * 1000);
 const EVENT_NOTIFICATION_LEAD_MS = ONE_HOUR_MS;
 const VATNZ_POSITION_CACHE_MS = 12 * ONE_HOUR_MS;
 const SOLO_ENDORSEMENT_CACHE_MS = 6 * ONE_HOUR_MS;
 const ENDORSEMENT_WARNING_CHECK_MS = 12 * ONE_HOUR_MS;
 const ENDORSEMENT_WARNING_DAYS = [30, 1, 0];
 const MIN_BOOKING_DURATION_MINUTES = 30;
+const BOOKING_REMINDER_MINUTES = readPositiveNumberEnv('BOOKING_REMINDER_MINUTES', 30);
 const MENTOR_TAG_TIMEOUT_MS = 5 * 60 * 1000;
 const MENTOR_APPROVAL_TIMEOUT_MS = 30 * 60 * 1000;
 const FSS_ROLE_ID = '1424849958074454146';
@@ -84,6 +91,7 @@ module.exports = {
   LOG_CHANNEL_ID,
   STAFF_ROLE_ID,
   EVENT_NOTIFICATIONS_ROLE_ID,
+  BOOKING_REMINDERS_ENABLED,
   EVENT_CALENDAR_URL,
   VATNZ_POSITIONS_URL,
   SOLO_ENDORSEMENTS_URL,
@@ -97,6 +105,7 @@ module.exports = {
   ENDORSEMENT_WARNING_CHECK_MS,
   ENDORSEMENT_WARNING_DAYS,
   MIN_BOOKING_DURATION_MINUTES,
+  BOOKING_REMINDER_MINUTES,
   MENTOR_TAG_TIMEOUT_MS,
   MENTOR_APPROVAL_TIMEOUT_MS,
   FSS_ROLE_ID,

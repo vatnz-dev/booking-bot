@@ -21,6 +21,7 @@ const {
 } = require('../constants');
 const {
   convertToUTC,
+  DateTime,
   formatBookingDateForDiscord,
   formatBookingEndForDiscord,
   formatBookingStartForDiscord,
@@ -28,9 +29,12 @@ const {
   getBookingDisplayInterval,
   getDurationMinutes,
   getPreviousWeekNZ,
+  NZ_ZONE,
   parseDdMm,
-  parseHhmm
+  parseHhmm,
+  toDiscordTimestamp
 } = require('../utils/time');
+const { cleanEmbedValue } = require('../utils/format');
 const { resolveAerodromes, formatAerodromeTraffic, formatSectorTraffic } = require('../services/traffic');
 const { validateVatnzPosition, validateVatnzEventPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
@@ -38,6 +42,9 @@ const {
   applySoloEndorsementOverride,
   buildExpiryWarning,
   buildSoloNotice,
+  daysUntilEnd,
+  endorsementCoversDate,
+  fetchSoloEndorsements,
   formatEndorsementScope,
   getBookingStartNz
 } = require('../services/soloEndorsements');
@@ -62,6 +69,42 @@ function getBookingSortMillis(booking) {
   return getBookingDisplayInterval(booking)?.startUtc?.toMillis() || 0;
 }
 
+function formatBookingConflict(position, ownerId, booking) {
+  const controller = ownerId ? `<@${ownerId}>` : 'another controller';
+  return `\u274C ${position} is already booked by ${controller} ${getBookingWindowDisplay(booking)}.`;
+}
+
+function getEndorsementSourceLabel(endorsement) {
+  if (endorsement.source === 's1_622') return 'S1 6.2.2 Solo';
+  return 'Solo Endorsement';
+}
+
+function getEndorsementDate(value) {
+  const date = DateTime.fromISO(String(value || ''), { zone: NZ_ZONE });
+  return date.isValid ? date.startOf('day') : null;
+}
+
+function formatEndorsementStatus(endorsement) {
+  const nowNz = DateTime.now().setZone(NZ_ZONE);
+  const start = getEndorsementDate(endorsement.startDateISO);
+  const end = getEndorsementDate(endorsement.endDateISO);
+
+  if (endorsementCoversDate(endorsement, nowNz)) {
+    const days = daysUntilEnd(endorsement, nowNz);
+    const suffix = end ? `expires ${toDiscordTimestamp(end, 'D')} (${toDiscordTimestamp(end, 'R')})` : `expires ${endorsement.endDate}`;
+    const daysText = days === 0 ? 'expires today' : `${days} day${days === 1 ? '' : 's'} left`;
+    return `Current - ${suffix}${days !== null ? `, ${daysText}` : ''}`;
+  }
+
+  if (start?.isValid && nowNz.startOf('day') < start) {
+    return `Not active yet - starts ${toDiscordTimestamp(start, 'D')}`;
+  }
+
+  return end?.isValid
+    ? `Expired ${toDiscordTimestamp(end, 'D')} (${toDiscordTimestamp(end, 'R')})`
+    : `Expired or invalid date (${endorsement.endDate || 'unknown expiry'})`;
+}
+
 function createInteractionHandlers({
   client,
   event,
@@ -78,14 +121,86 @@ function createInteractionHandlers({
   const {
     clearMentorTimers,
     clearExtensionSelectionTimer,
+    clearBookingReminderTimer,
     scheduleExtensionSelectionTimeout,
     scheduleMentorTagTimeout,
-    scheduleMentorApprovalTimeout
+    scheduleMentorApprovalTimeout,
+    scheduleBookingReminder
   } = bookingLifecycle;
   const {
     findMatchingEventThreadForBooking,
-    handleEventThreadButton
+    handleEventThreadButton,
+    refreshEventCoverageNotificationsForBooking
   } = eventThreadService;
+
+  async function handleMyEndorsements(interaction) {
+    await interaction.deferReply({ ephemeral: true });
+
+    const cid = await getVatsimId(interaction.user.id);
+    if (!cid) {
+      await interaction.editReply({
+        content: '\u274C Could not retrieve your VATSIM ID. Please ensure your Discord is linked here: https://community.vatsim.net/'
+      });
+      return;
+    }
+
+    let endorsements;
+    try {
+      endorsements = await fetchSoloEndorsements();
+    } catch (err) {
+      console.warn('Could not fetch VATNZ solo endorsements for /myendorsements:', err?.message || err);
+      await interaction.editReply({ content: 'Could not fetch VATNZ solo endorsements right now. Please try again later.' });
+      return;
+    }
+
+    const nowNz = DateTime.now().setZone(NZ_ZONE);
+    const matching = endorsements
+      .filter(endorsement => endorsement.cid === String(cid))
+      .sort((a, b) => {
+        const aCurrent = endorsementCoversDate(a, nowNz);
+        const bCurrent = endorsementCoversDate(b, nowNz);
+        if (aCurrent !== bCurrent) return aCurrent ? -1 : 1;
+        return String(a.endDateISO || '').localeCompare(String(b.endDateISO || ''));
+      });
+
+    const embed = new EmbedBuilder()
+      .setColor('#0057B8')
+      .setTitle('My Solo Endorsements')
+      .setDescription(`VATSIM CID: ${cid}`)
+      .setTimestamp();
+
+    if (matching.length === 0) {
+      embed.addFields({
+        name: 'No endorsements found',
+        value: 'No VATNZ solo or S1 6.2.2 endorsements were found for your linked VATSIM CID.',
+        inline: false
+      });
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    for (const endorsement of matching.slice(0, 25)) {
+      const value = [
+        `Scope: ${formatEndorsementScope(endorsement)}`,
+        `Status: ${formatEndorsementStatus(endorsement)}`,
+        endorsement.approvedBy ? `Approved by: ${endorsement.approvedBy}` : null,
+        endorsement.url ? `[Source](${endorsement.url})` : null
+      ].filter(Boolean).join('\n');
+
+      const name = `${getEndorsementSourceLabel(endorsement)} - ${endorsement.category || 'VATNZ'}`.slice(0, 256);
+      embed.addFields({
+        name,
+        value: cleanEmbedValue(value),
+        inline: false
+      });
+    }
+
+    if (matching.length > 25) {
+      embed.setFooter({ text: `Showing 25 of ${matching.length} endorsements.` });
+    }
+
+    await interaction.editReply({ embeds: [embed] });
+  }
 
   async function handleDeleteBookings(interaction) {
     const userId = String(interaction.member.user.id);
@@ -210,6 +325,8 @@ function createInteractionHandlers({
     messages.set(targetUserId, userBookings);
     clearMentorTimers(booking.messageId);
     clearExtensionSelectionTimer(booking.messageId);
+    clearBookingReminderTimer(booking.messageId);
+    await refreshEventCoverageNotificationsForBooking(booking);
 
     try {
       const messageToDelete = await fetchBookingMessage(booking);
@@ -352,6 +469,7 @@ function createInteractionHandlers({
       const newBookingSectors = [pos, ...extendedSectors];
 
       for (const entry of rawDB) {
+        const conflictOwnerId = String(entry.key);
         const bookings = entry.data;
         if (!Array.isArray(bookings)) continue;
 
@@ -361,7 +479,7 @@ function createInteractionHandlers({
           const bEnd = parseInt(b.end);
           const timeOverlap = !(end <= bStart || start >= bEnd);
           if (timeOverlap) {
-            return i.editReply({ content: '\u274C This time slot is already booked for that position.', ephemeral: true });
+            return i.editReply({ content: formatBookingConflict(pos, conflictOwnerId, b), ephemeral: true });
           }
         }
       }
@@ -437,6 +555,7 @@ function createInteractionHandlers({
             }
 
             messages.set(otherUserId, bookings);
+            await refreshEventCoverageNotificationsForBooking(b);
           }
         }
       }
@@ -519,6 +638,8 @@ function createInteractionHandlers({
       };
       userBookings.push(createdBooking);
       messages.set(userId, userBookings);
+      scheduleBookingReminder(userId, createdBooking);
+      await refreshEventCoverageNotificationsForBooking(createdBooking);
 
       await sendAuditLog({
         action: 'Booking Created',
@@ -859,6 +980,9 @@ function createInteractionHandlers({
       clearExtensionSelectionTimer(messageId);
       booking.awaitingExtensionSelection = false;
       messages.set(userId, userBookings);
+      if (updated) {
+        await refreshEventCoverageNotificationsForBooking(booking);
+      }
 
       await interaction.editReply({ content: '\u2705 Extended sectors updated.', components: [] });
 
@@ -1065,6 +1189,9 @@ function createInteractionHandlers({
             case 'expectedtraffic':
               await handleExpectedTraffic(interaction);
               break;
+            case 'myendorsements':
+              await handleMyEndorsements(interaction);
+              break;
             case 'mentor':
               await handleMentor(interaction);
               break;
@@ -1132,6 +1259,7 @@ function createInteractionHandlers({
 
   return {
     registerInteractionHandlers,
+    handleMyEndorsements,
     handleDeleteBookings,
     handleExpectedTraffic,
     handleDeleteBookingSelect,

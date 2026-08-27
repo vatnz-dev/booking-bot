@@ -1,18 +1,37 @@
 const { EmbedBuilder } = require('discord.js');
 
 const {
+  BOOKING_REMINDERS_ENABLED,
+  BOOKING_REMINDER_MINUTES,
   MENTOR_TAG_TIMEOUT_MS,
   MENTOR_APPROVAL_TIMEOUT_MS,
   ONE_HOUR_MS,
   THUMBS_UP
 } = require('../constants');
-const { DateTime, buildNzDateTime, getPreviousWeekNZ } = require('../utils/time');
+const {
+  DateTime,
+  buildNzDateTime,
+  formatBookingWindowForDiscord,
+  getBookingDisplayInterval,
+  getPreviousWeekNZ,
+  toDiscordTimestamp
+} = require('../utils/time');
 const { formatSectorTraffic } = require('./traffic');
 
-function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAuditLog }) {
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+function createBookingLifecycle({
+  client,
+  messages,
+  fetchBookingMessage,
+  getBookingMessageLink = () => null,
+  sendAuditLog,
+  refreshEventCoverageNotificationsForBooking = async () => {}
+}) {
   const mentorTagTimeouts = new Map();
   const mentorApprovalTimeouts = new Map();
   const extensionSelectionTimeouts = new Map();
+  const bookingReminderTimeouts = new Map();
   let bookingCleanupInterval = null;
 
   function clearMentorTimers(messageId) {
@@ -33,6 +52,14 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
     if (timer) {
       clearTimeout(timer);
       extensionSelectionTimeouts.delete(messageId);
+    }
+  }
+
+  function clearBookingReminderTimer(messageId) {
+    const timer = bookingReminderTimeouts.get(messageId);
+    if (timer) {
+      clearTimeout(timer);
+      bookingReminderTimeouts.delete(messageId);
     }
   }
 
@@ -91,6 +118,8 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
     messages.set(entry.ownerId, entry.bookings);
     clearMentorTimers(messageId);
     clearExtensionSelectionTimer(messageId);
+    clearBookingReminderTimer(messageId);
+    await refreshEventCoverageNotificationsForBooking(removedBooking);
 
     try {
       const msg = await fetchBookingMessage(removedBooking);
@@ -169,6 +198,99 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
     }
 
     scheduleMentorApprovalTimeout(ownerId, booking.messageId, remainingFromTimestamp(booking.mentorTaggedAt, MENTOR_APPROVAL_TIMEOUT_MS));
+  }
+
+  async function sendBookingReminder(ownerId, messageId) {
+    const entry = findBookingByMessageId(messageId);
+    if (!entry?.booking || entry.booking.reminderSentAt) return;
+
+    const interval = getBookingDisplayInterval(entry.booking);
+    const nowUtc = DateTime.now().toUTC();
+    if (!interval || interval.startUtc <= nowUtc) return;
+
+    const messageLink = getBookingMessageLink(entry.booking);
+    const fields = [
+      { name: 'Position', value: entry.booking.position || 'Booking', inline: true },
+      { name: 'Time', value: formatBookingWindowForDiscord(entry.booking) || `${entry.booking.date} ${entry.booking.start}-${entry.booking.end}`, inline: false }
+    ];
+    if (messageLink) {
+      fields.push({ name: 'Booking', value: `[Open booking](${messageLink})`, inline: false });
+    }
+
+    try {
+      const user = await client.users.fetch(ownerId);
+      await user.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#00AEFF')
+            .setTitle('Booking Reminder')
+            .setDescription(`Your **${entry.booking.position}** booking starts ${toDiscordTimestamp(interval.startUtc, 'R')}.`)
+            .addFields(fields)
+            .setTimestamp()
+        ]
+      });
+
+      entry.booking.reminderSentAt = new Date().toISOString();
+      entry.booking.reminderMinutes = BOOKING_REMINDER_MINUTES;
+      messages.set(entry.ownerId, entry.bookings);
+      await sendAuditLog({
+        action: 'Booking Reminder Sent',
+        actorLabel: 'System',
+        targetUserId: entry.ownerId,
+        booking: entry.booking,
+        reason: `${BOOKING_REMINDER_MINUTES}-minute reminder`,
+        color: '#00AEFF'
+      });
+    } catch (err) {
+      console.warn(`Could not send booking reminder to ${ownerId}:`, err?.message || err);
+    } finally {
+      clearBookingReminderTimer(messageId);
+    }
+  }
+
+  function scheduleBookingReminder(ownerId, booking) {
+    clearBookingReminderTimer(booking?.messageId);
+    if (!BOOKING_REMINDERS_ENABLED || !booking?.messageId || booking.reminderSentAt) return;
+
+    const interval = getBookingDisplayInterval(booking);
+    if (!interval) return;
+
+    const nowUtc = DateTime.now().toUTC();
+    if (interval.startUtc <= nowUtc) return;
+
+    const reminderAt = interval.startUtc.minus({ minutes: BOOKING_REMINDER_MINUTES });
+    const delayMs = Math.max(1000, reminderAt.diff(nowUtc).milliseconds);
+    const cappedDelayMs = Math.min(delayMs, MAX_TIMEOUT_MS);
+
+    const timeout = setTimeout(() => {
+      if (delayMs > MAX_TIMEOUT_MS) {
+        const entry = findBookingByMessageId(booking.messageId);
+        if (entry?.booking) scheduleBookingReminder(entry.ownerId, entry.booking);
+        return;
+      }
+
+      sendBookingReminder(ownerId, booking.messageId).catch(err => {
+        console.warn('Booking reminder failed:', err?.message || err);
+      });
+    }, cappedDelayMs);
+
+    bookingReminderTimeouts.set(booking.messageId, timeout);
+  }
+
+  function rescheduleBookingReminder(ownerId, booking) {
+    scheduleBookingReminder(ownerId, booking);
+  }
+
+  function rescheduleAllBookingReminders() {
+    for (const entry of messages.all()) {
+      const ownerId = String(entry.key);
+      const bookings = entry.data;
+      if (!Array.isArray(bookings)) continue;
+
+      for (const booking of bookings) {
+        rescheduleBookingReminder(ownerId, booking);
+      }
+    }
   }
 
   async function handleMentorApprovalReaction(reaction, user) {
@@ -252,6 +374,7 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
       if (!Array.isArray(userBookings)) continue;
 
       const activeBookings = [];
+      const removedBookings = [];
       for (const booking of userBookings) {
         const bookingEnd = getBookingEndForCleanup(booking);
         if (!bookingEnd || bookingEnd > nowNz) {
@@ -261,6 +384,7 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
 
         clearMentorTimers(booking.messageId);
         clearExtensionSelectionTimer(booking.messageId);
+        clearBookingReminderTimer(booking.messageId);
 
         try {
           const msg = await fetchBookingMessage(booking);
@@ -277,14 +401,19 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
           reason: 'Booking end time has passed',
           color: '#D9534F'
         });
+        removedBookings.push(booking);
       }
 
       messages.set(ownerId, activeBookings);
+      for (const removedBooking of removedBookings) {
+        await refreshEventCoverageNotificationsForBooking(removedBooking);
+      }
     }
   }
 
   function startBookingCleanupScheduler() {
     if (bookingCleanupInterval) return;
+    rescheduleAllBookingReminders();
     cleanupExpiredBookings().catch(err => console.warn('Booking cleanup failed:', err?.message || err));
     bookingCleanupInterval = setInterval(() => {
       cleanupExpiredBookings().catch(err => console.warn('Booking cleanup failed:', err?.message || err));
@@ -294,6 +423,7 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
   return {
     clearMentorTimers,
     clearExtensionSelectionTimer,
+    clearBookingReminderTimer,
     findBookingByMessageId,
     scheduleExtensionSelectionTimeout,
     removeBookingAndNotify,
@@ -301,6 +431,9 @@ function createBookingLifecycle({ client, messages, fetchBookingMessage, sendAud
     scheduleMentorApprovalTimeout,
     remainingFromTimestamp,
     rescheduleMentorTimers,
+    scheduleBookingReminder,
+    rescheduleBookingReminder,
+    rescheduleAllBookingReminders,
     handleMentorApprovalReaction,
     getBookingEndForCleanup,
     cleanupExpiredBookings,

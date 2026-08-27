@@ -247,7 +247,9 @@ function createEventThreadService({
   sendAuditLog,
   clearMentorTimers,
   clearExtensionSelectionTimer,
+  clearBookingReminderTimer = () => {},
   rescheduleMentorTimers,
+  scheduleBookingReminder = () => {},
   isStaffMember
 }) {
   let eventThreadCheckInterval = null;
@@ -469,6 +471,76 @@ function createEventThreadService({
     });
   }
 
+  function shouldRefreshEventCoverageNotification(state) {
+    return Boolean(state?.notificationMessageId && !state.notificationDeletedAt && state.event);
+  }
+
+  async function updateEventCoverageNotification(eventData, state = getEventThreadState(eventData?.uid)) {
+    if (!shouldRefreshEventCoverageNotification(state)) return false;
+
+    try {
+      const channel = state.notificationChannelId
+        ? await fetchDiscordChannel(state.notificationChannelId, 'event notifications channel')
+        : await getBookingChannel();
+      if (!channel?.messages) {
+        setEventThreadState(state.event.uid, {
+          ...state,
+          notificationUpdateError: 'Notification channel was not found.',
+          updatedAt: new Date().toISOString()
+        });
+        return false;
+      }
+
+      const message = await channel.messages.fetch(state.notificationMessageId);
+      await message.edit({
+        content: EVENT_NOTIFICATIONS_ROLE_ID ? `<@&${EVENT_NOTIFICATIONS_ROLE_ID}>` : undefined,
+        allowedMentions: { parse: [] },
+        embeds: [buildEventCoverageEmbed(eventData || state.event)]
+      });
+
+      const updatedState = {
+        ...state,
+        event: compactEventState(eventData || state.event),
+        notificationUpdatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      delete updatedState.notificationUpdateError;
+      setEventThreadState((eventData || state.event).uid, updatedState);
+      return true;
+    } catch (err) {
+      const updatedState = {
+        ...state,
+        notificationUpdateError: err?.message || String(err),
+        updatedAt: new Date().toISOString()
+      };
+      if (err?.code === 10008) {
+        updatedState.notificationDeletedAt = new Date().toISOString();
+      }
+      setEventThreadState(state.event.uid, updatedState);
+      console.warn(`Could not update event coverage notification ${state.notificationMessageId}:`, err?.message || err);
+      return false;
+    }
+  }
+
+  async function refreshEventCoverageNotificationsForBooking(booking) {
+    if (!booking) return;
+
+    for (const entry of eventThreads.all()) {
+      const state = entry.data;
+      if (!shouldRefreshEventCoverageNotification(state)) continue;
+      if (!bookingOverlapsEvent(booking, state.event)) continue;
+      await updateEventCoverageNotification(state.event, state);
+    }
+  }
+
+  async function refreshActiveEventCoverageNotifications() {
+    for (const entry of eventThreads.all()) {
+      const state = entry.data;
+      if (!shouldRefreshEventCoverageNotification(state)) continue;
+      await updateEventCoverageNotification(state.event, state);
+    }
+  }
+
   async function cleanupFinishedEventCoverageNotifications() {
     const nowNz = DateTime.now().setZone('Pacific/Auckland');
 
@@ -565,6 +637,7 @@ function createEventThreadService({
 
         clearMentorTimers(oldMessageId);
         clearExtensionSelectionTimer(oldMessageId);
+        clearBookingReminderTimer(oldMessageId);
 
         booking.previousMessageIds = [...(booking.previousMessageIds || []), oldMessageId].slice(-5);
         booking.messageId = newMessage.id;
@@ -574,6 +647,7 @@ function createEventThreadService({
         booking.eventName = eventData.title;
         booking.guildId = thread.guild?.id || booking.guildId;
         rescheduleMentorTimers(ownerId, booking);
+        scheduleBookingReminder(ownerId, booking);
 
         moved.push({
           ownerId,
@@ -848,6 +922,9 @@ function createEventThreadService({
     buildBookingEmbedFromRecord,
     buildEventCoverageEmbed,
     postEventCoverageNotification,
+    updateEventCoverageNotification,
+    refreshEventCoverageNotificationsForBooking,
+    refreshActiveEventCoverageNotifications,
     cleanupFinishedEventCoverageNotifications,
     updateEventPromptMessage,
     postEventThreadPrompt,

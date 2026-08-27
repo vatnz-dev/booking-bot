@@ -11,6 +11,10 @@ module.exports = [
     description: 'View your controller bookings.'
   },
   {
+    name: 'myendorsements',
+    description: 'View your VATNZ solo and S1 endorsements.'
+  },
+  {
     name: 'deletebookings',
     description: 'Delete your controller bookings.',
     options: [
