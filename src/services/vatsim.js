@@ -17,6 +17,38 @@ async function getVatsimId(discordId) {
   }
 }
 
+/*
+// VATSIM ATC booking integration: kept inactive until API access is available.
+// Configure the issued authentication and replace division/subdivision before enabling.
+async function sendBooking({ callsign, cid, start, end }) {
+  try {
+    const payload = {
+      callsign,
+      cid,
+      type: 'booking',
+      start,
+      end,
+      division: 'TBC',
+      subdivision: 'TBC'
+    };
+    const response = await axios.post('https://atc-bookings.vatsim.net/api/booking', payload);
+    return response.data.id;
+  } catch (error) {
+    console.error('VATSIM booking failed:', error.response?.status || error.message);
+    return null;
+  }
+}
+
+async function deleteVatsimBooking(bookingId) {
+  try {
+    await axios.delete(`https://atc-bookings.vatsim.net/api/booking/${bookingId}`);
+  } catch (error) {
+    console.error(`Failed to delete VATSIM booking ${bookingId}:`, error.response?.status || error.message);
+  }
+}
+*/
+
 module.exports = {
   getVatsimId
+  // , sendBooking, deleteVatsimBooking
 };

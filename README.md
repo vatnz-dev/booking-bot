@@ -132,6 +132,8 @@ The bot checks the VATNZ calendar feed on startup and every 5 minutes.
 
 ## Runtime Files
 
+The VATSIM ATC booking create/delete helpers and booking hooks are retained as commented-out code in `src/services/vatsim.js` and `src/handlers/interactions.js`. They do not make requests. Before enabling, configure the issued API authentication, replace the `TBC` division/subdivision values, and connect automatic deletions as well as manual deletions to the API.
+
 These files are created locally and ignored by git:
 
 - `.env`

@@ -46,6 +46,7 @@ const {
 } = require('../services/traffic');
 const { validateVatnzPosition, validateVatnzEventPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
+// const { sendBooking, deleteVatsimBooking } = require('../services/vatsim');
 const {
   applySoloEndorsementOverride,
   buildExpiryWarning,
@@ -389,6 +390,12 @@ function createInteractionHandlers({
 
     const booking = userBookings[selectedIndex];
 
+    /*
+    if (booking.bookingvatid) {
+      await deleteVatsimBooking(booking.bookingvatid);
+    }
+    */
+
     userBookings.splice(selectedIndex, 1);
     messages.set(targetUserId, userBookings);
     clearMentorTimers(booking.messageId);
@@ -695,6 +702,17 @@ function createInteractionHandlers({
       if (!channel?.send) {
         return i.editReply({ content: '\u274C Could not find the booking channel. Check CHANNEL_ID.', ephemeral: true });
       }
+      /*
+      const bookingvatid = await sendBooking({
+        callsign: pos,
+        cid: vatsimId,
+        start: startUTC,
+        end: endUTC
+      });
+      if (!bookingvatid) {
+        return i.editReply({ content: 'VATSIM booking failed. Please try again later.', ephemeral: true });
+      }
+      */
       const sentMessage = await channel.send({ embeds: [bookingEmbed] });
 
       const existing = messages.get(userId);
@@ -724,6 +742,7 @@ function createInteractionHandlers({
         } : null,
         startUtc: startUTC,
         endUtc: endUTC,
+        // bookingvatid,
         createdAt: new Date().toISOString()
       };
       userBookings.push(createdBooking);
