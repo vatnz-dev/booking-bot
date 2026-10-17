@@ -45,6 +45,7 @@ function registerReadyHandlers({
   client,
   event,
   settings,
+  startStatsimHealthScheduler,
   getBookingChannel,
   getVatnzEventPositions,
   startBookingCleanupScheduler,
@@ -56,6 +57,7 @@ function registerReadyHandlers({
     startBookingCleanupScheduler();
     startEventThreadScheduler();
     startEndorsementWarningScheduler?.();
+    startStatsimHealthScheduler?.();
   });
 
   client.on('clientReady', async () => {

@@ -35,6 +35,7 @@ const {
   toDiscordTimestamp
 } = require('../utils/time');
 const { cleanEmbedValue } = require('../utils/format');
+const { findOverlappingBooking } = require('../utils/bookingConflicts');
 const {
   resolveAerodromes,
   formatAerodromeTraffic,
@@ -313,6 +314,8 @@ function createInteractionHandlers({
       const status = state.enabled ? 'enabled' : 'disabled';
       const details = [
         `StatSim traffic lookups are currently **${status}**.`,
+        state.autoDisabled ? 'Automatically disabled due to an outage; recovery checks are active.'
+          : state.enabled ? 'Automatic outage detection and recovery are active.' : 'Disabled by staff/configuration; enable it to resume automatic checks.',
         `Source: ${state.source}.`
       ];
 
@@ -417,7 +420,23 @@ function createInteractionHandlers({
     });
   }
 
+  const pendingBookingUsers = new Set();
+
   async function handlePlan(i) {
+    if (!i.isModalSubmit()) return handlePlanInteraction(i);
+    const userId = i.user.id;
+    if (pendingBookingUsers.has(userId)) {
+      return i.reply({ content: 'Your previous booking is still being processed. Please wait for it to finish.', ephemeral: true });
+    }
+    pendingBookingUsers.add(userId);
+    try {
+      return await handlePlanInteraction(i);
+    } finally {
+      pendingBookingUsers.delete(userId);
+    }
+  }
+
+  async function handlePlanInteraction(i) {
     if (i.isModalSubmit()) {
       await i.deferReply({ ephemeral: true });
 
@@ -529,6 +548,16 @@ function createInteractionHandlers({
       const soloEndorsement = eligibility.soloEndorsement || null;
 
       const rawDB = messages.all();
+      const startUTC = convertToUTC(date, startRaw);
+      const endUTC = convertToUTC(date, endRaw);
+      const bookingDisplayRecord = { date, start, end, startUtc: startUTC, endUtc: endUTC };
+      const ownConflict = findOverlappingBooking(messages.get(userId), bookingDisplayRecord);
+      if (ownConflict) {
+        return i.editReply({
+          content: `\u274C You already have a booking for ${ownConflict.position} ${getBookingWindowDisplay(ownConflict)}. You cannot control two positions at once. Delete or finish that booking, or choose a different time.`,
+          ephemeral: true
+        });
+      }
       const isCTR = pos.endsWith("_CTR") && pos !== "NZAA-R_CTR";
       const extendedSectors = isCTR ? [...(autoInheritanceMap[pos] || [])] : [];
       const newBookingSectors = [pos, ...extendedSectors];
@@ -624,10 +653,6 @@ function createInteractionHandlers({
           }
         }
       }
-
-      const startUTC = convertToUTC(date, String(start).padStart(4, '0'));
-      const endUTC = convertToUTC(date, String(end).padStart(4, '0'));
-      const bookingDisplayRecord = { date, start, end, startUtc: startUTC, endUtc: endUTC };
 
       const bookingEmbed = new EmbedBuilder()
         .setColor('#000000')

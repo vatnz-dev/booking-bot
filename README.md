@@ -105,8 +105,10 @@ npm.cmd start
 - `/closeeventposition` - Close an event-only position.
 
 Bookings shorter than 30 minutes are rejected.
+Controllers cannot create overlapping bookings, even at different positions or in different event threads. Back-to-back bookings are allowed.
 Booking reminders are sent by DM `BOOKING_REMINDER_MINUTES` minutes before start unless `BOOKING_REMINDERS_ENABLED=false`.
 StatSim starts enabled unless `STATSIM_ENABLED=false` is set. Runtime changes from `/statsim` are stored in `settings.json` and override the env default until changed again.
+Failed requests or unreadable StatSim traffic automatically disable lookups. The bot probes the traffic endpoint on startup and every `STATSIM_HEALTH_CHECK_MINUTES` (default 5), automatically re-enabling lookups after recovery. Valid zero counts are accepted as a healthy response. A staff `/statsim mode:disable` stays disabled until staff enable it again. During an outage, users see: "No StatSim data available at the moment due to server/bot errors."
 
 ## Event Threads
 

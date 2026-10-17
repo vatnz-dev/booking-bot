@@ -11,6 +11,9 @@ const DEFAULT_STATSIM_TIMEOUT_MS = 15000;
 const DEFAULT_ZERO_FALLBACK_YEARS = 3;
 const STATSIM_SETTING_KEY = 'statsim';
 const STATSIM_DISABLED_MESSAGE = 'No StatSim data available at the moment due to server/bot errors.';
+let healthCheckPromise = null;
+let healthCheckTimer = null;
+let stateRevision = 0;
 
 function resolveAerodromes(position) {
   if (sectorAerodromeMap[position]) return sectorAerodromeMap[position];
@@ -35,6 +38,20 @@ async function getTrafficData(icao, date, start = '0000', end = '2359') {
   const key = `${icao}_${fromUtc}_${toUtc}`;
   if (trafficCache.has(key)) return trafficCache.get(key);
 
+  let counts;
+  const revision = stateRevision;
+  try {
+    counts = await fetchStatsimTraffic(icao, fromUtc, toUtc);
+  } catch (error) {
+    markStatsimUnavailable(error, revision);
+    throw error;
+  }
+  const result = { icao, ...counts, statsimDate: date, requestedDate: date };
+  trafficCache.set(key, result);
+  return result;
+}
+
+async function fetchStatsimTraffic(icao, fromUtc, toUtc) {
   const url = `${STATSIM_BASE_URL}/events/custom/${encodeURIComponent(fromUtc)}/${encodeURIComponent(toUtc)}/${encodeURIComponent(icao)}`;
   const { data: html } = await axios.get(url, {
     timeout: getStatsimTimeoutMs(),
@@ -43,15 +60,7 @@ async function getTrafficData(icao, date, start = '0000', end = '2359') {
     }
   });
 
-  const result = {
-    icao,
-    ...parseStatsimTrafficHtml(html, icao),
-    statsimDate: date,
-    requestedDate: date
-  };
-
-  trafficCache.set(key, result);
-  return result;
+  return parseStatsimTrafficHtml(html, icao);
 }
 
 function getStatsimTimeoutMs() {
@@ -76,6 +85,7 @@ function getStatsimState() {
   if (stored && typeof stored === 'object' && typeof stored.enabled === 'boolean') {
     return {
       enabled: stored.enabled,
+      autoDisabled: stored.autoDisabled === true,
       reason: stored.reason || null,
       updatedAt: stored.updatedAt || null,
       updatedBy: stored.updatedBy || null,
@@ -85,6 +95,7 @@ function getStatsimState() {
 
   return {
     enabled: getEnvStatsimEnabled(),
+    autoDisabled: false,
     reason: null,
     updatedAt: null,
     updatedBy: null,
@@ -96,17 +107,67 @@ function isStatsimEnabled() {
   return getStatsimState().enabled;
 }
 
-function setStatsimEnabled(enabled, { actorId = null, reason = null } = {}) {
+function setStatsimEnabled(enabled, { actorId = null, reason = null, autoDisabled = false } = {}) {
   const state = {
     enabled: Boolean(enabled),
+    autoDisabled: !enabled && autoDisabled,
     reason: reason ? String(reason).trim().slice(0, 250) : null,
     updatedAt: new Date().toISOString(),
     updatedBy: actorId ? String(actorId) : null
   };
 
   settings.set(STATSIM_SETTING_KEY, state);
+  stateRevision += 1;
   if (state.enabled) trafficCache.clear();
   return getStatsimState();
+}
+
+function markStatsimUnavailable(error, revision = stateRevision) {
+  if (revision !== stateRevision || !getStatsimState().enabled) return;
+  setStatsimEnabled(false, { autoDisabled: true, reason: error?.message || 'StatSim lookup failed' });
+  console.warn('StatSim automatically disabled; recovery checks will continue.');
+}
+
+function getStatsimHealthCheckMs() {
+  const minutes = Number(process.env.STATSIM_HEALTH_CHECK_MINUTES || 5);
+  return (Number.isFinite(minutes) && minutes >= 1 ? minutes : 5) * 60000;
+}
+
+async function checkStatsimHealth() {
+  if (healthCheckPromise) return healthCheckPromise;
+  const state = getStatsimState();
+  if (!state.enabled && !state.autoDisabled) return false;
+  const revision = stateRevision;
+  healthCheckPromise = (async () => {
+    try {
+      const date = DateTime.now().setZone(NZ_ZONE).minus({ days: 7 }).toISODate();
+      const { fromUtc, toUtc } = buildUtcWindowFromNz(date);
+      // Always probe the real traffic endpoint without using cached results.
+      await fetchStatsimTraffic('NZAA', fromUtc, toUtc);
+      const current = getStatsimState();
+      if (current.autoDisabled && revision === stateRevision) {
+        setStatsimEnabled(true, { reason: 'StatSim recovered automatically' });
+        console.log('StatSim recovered; traffic lookups automatically enabled.');
+      }
+      return true;
+    } catch (error) {
+      markStatsimUnavailable(error, revision);
+      return false;
+    }
+  })();
+  try {
+    return await healthCheckPromise;
+  } finally {
+    healthCheckPromise = null;
+  }
+}
+
+function startStatsimHealthScheduler() {
+  if (healthCheckTimer) return;
+  const check = () => checkStatsimHealth().catch(error => console.warn('StatSim health check failed:', error.message));
+  void check();
+  healthCheckTimer = setInterval(check, getStatsimHealthCheckMs());
+  healthCheckTimer.unref();
 }
 
 function getZeroFallbackYears() {
@@ -131,7 +192,7 @@ function parseStatsimChartData(html, icao) {
   try {
     const charts = JSON.parse(chartMatch[1]);
     const airport = charts.find(chart => String(chart?.icao || '').toUpperCase() === icao);
-    if (!airport) return null;
+    if (!airport || !Array.isArray(airport.arrivals) || !Array.isArray(airport.departures)) return null;
 
     const departures = Array.isArray(airport.departures)
       ? airport.departures.reduce((sum, point) => sum + toCount(point?.y), 0)
@@ -153,7 +214,7 @@ function parseStatsimCountText(html) {
   const departures = text.match(/Departures:\s*([\d,]+)/i);
   const arrivals = text.match(/Arrivals:\s*([\d,]+)/i);
 
-  if (!departures && !arrivals) return null;
+  if (!departures || !arrivals) return null;
   return {
     departures: toCount(departures?.[1]),
     arrivals: toCount(arrivals?.[1])
@@ -199,8 +260,8 @@ async function getTrafficDataSet(aerodromes, date, start = '0000', end = '2359')
   const failures = results.filter(result => result.error);
   const total = results.reduce((sum, result) => sum + result.arrivals + result.departures, 0);
 
-  if (failures.length === results.length && results.length > 0) {
-    throw new Error(`All StatSim lookups failed for ${date}: ${failures.map(result => `${result.icao}: ${result.error}`).join('; ')}`);
+  if (failures.length > 0) {
+    throw new Error(`StatSim lookups failed for ${date}: ${failures.map(result => `${result.icao}: ${result.error}`).join('; ')}`);
   }
 
   return { date, results, total, failures };
@@ -246,11 +307,7 @@ async function getSectorTraffic(sector, date, start = '0000', end = '2359') {
 
   const aerodromes = sectorAerodromeMap[sector] || [];
 
-  const promises = aerodromes.map(icao =>
-    getTrafficData(icao, date, start, end).catch(() => ({ arrivals: 0, departures: 0 }))
-  );
-
-  const results = await Promise.all(promises);
+  const { results } = await getTrafficDataSet(aerodromes, date, start, end);
 
   let arrivals = 0;
   let departures = 0;
@@ -326,6 +383,8 @@ module.exports = {
   getStatsimState,
   isStatsimEnabled,
   setStatsimEnabled,
+  checkStatsimHealth,
+  startStatsimHealthScheduler,
   STATSIM_DISABLED_MESSAGE,
   getTrafficData,
   getSectorTraffic,

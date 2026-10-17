@@ -18,6 +18,7 @@
   const { getVatsimId } = require('./src/services/vatsim');
   const { createInteractionHandlers } = require('./src/handlers/interactions');
   const { registerReadyHandlers } = require('./src/handlers/ready');
+  const { startStatsimHealthScheduler } = require('./src/services/traffic');
 
   dns.setDefaultResultOrder?.('ipv4first');
 
@@ -108,6 +109,7 @@
     client,
     event,
     settings,
+    startStatsimHealthScheduler,
     getBookingChannel: discordHelpers.getBookingChannel,
     getVatnzEventPositions,
     startBookingCleanupScheduler: bookingLifecycle.startBookingCleanupScheduler,

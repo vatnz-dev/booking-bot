@@ -5,6 +5,7 @@
   },
   "statsim": {
     "enabled": true,
+    "autoDisabled": false,
     "reason": null,
     "updatedAt": null,
     "updatedBy": null

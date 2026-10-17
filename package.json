@@ -4,6 +4,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node .",
+    "test": "node --test tests/*.test.js",
     "node-clean": "rm -rf node_modules && rm package-lock.json && npm cache clear --force && npm install"
   },
   "dependencies": {
