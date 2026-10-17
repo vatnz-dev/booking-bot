@@ -6,9 +6,45 @@ const {
   EmbedBuilder
 } = require('discord.js');
 
+function isBookingPanel(message, botId) {
+  return message.author?.id === botId && message.components.some(row =>
+    row.components.some(component => component.customId === 'plan')
+  );
+}
+
+async function ensureBookingPanel({ channel, botId, settings, payload }) {
+  const saved = settings.get('bookingPanel');
+  if (saved?.channelId === channel.id && saved.messageId) {
+    try {
+      const message = await channel.messages.fetch({ message: saved.messageId, force: true });
+      if (isBookingPanel(message, botId)) return message;
+    } catch (error) {
+      if (error.code !== 10008) throw error;
+    }
+  }
+
+  // Adopt panels posted before message IDs were persisted, including older history.
+  let before;
+  while (true) {
+    const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    const existing = batch.find(message => isBookingPanel(message, botId));
+    if (existing) {
+      settings.set('bookingPanel', { channelId: channel.id, messageId: existing.id });
+      return existing;
+    }
+    if (batch.size < 100) break;
+    before = batch.last().id;
+  }
+
+  const message = await channel.send(payload);
+  settings.set('bookingPanel', { channelId: channel.id, messageId: message.id });
+  return message;
+}
+
 function registerReadyHandlers({
   client,
   event,
+  settings,
   getBookingChannel,
   getVatnzEventPositions,
   startBookingCleanupScheduler,
@@ -58,15 +94,26 @@ function registerReadyHandlers({
 
     const bookingChannel = await getBookingChannel();
     if (bookingChannel?.send) {
-      await bookingChannel.send({
-        content: String(' '),
-        components: [new ActionRowBuilder().addComponents(plan)],
-        embeds: [planEmbed]
-      });
+      try {
+        const panel = await ensureBookingPanel({
+          channel: bookingChannel,
+          botId: client.user.id,
+          settings,
+          payload: {
+            content: String(' '),
+            components: [new ActionRowBuilder().addComponents(plan)],
+            embeds: [planEmbed]
+          }
+        });
+        console.log(`Booking panel ready: ${panel.id}`);
+      } catch (error) {
+        console.error('Could not ensure booking panel:', error);
+      }
     }
   });
 }
 
 module.exports = {
-  registerReadyHandlers
+  registerReadyHandlers,
+  ensureBookingPanel
 };

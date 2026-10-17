@@ -6,7 +6,7 @@
   const { Client, GatewayIntentBits, Partials } = require('discord.js');
   const syncCommands = require('discord-sync-commands');
 
-  const { event, messages, eventclose, eventThreads, endorsementWarnings } = require('./src/data/databases');
+  const { event, messages, eventclose, eventThreads, endorsementWarnings, settings } = require('./src/data/databases');
   const commandDefinitions = require('./src/commands/definitions');
   const { STAFF_ROLE_ID } = require('./src/constants');
   const { getVatnzEventPositions } = require('./src/services/positions');
@@ -107,6 +107,7 @@
   registerReadyHandlers({
     client,
     event,
+    settings,
     getBookingChannel: discordHelpers.getBookingChannel,
     getVatnzEventPositions,
     startBookingCleanupScheduler: bookingLifecycle.startBookingCleanupScheduler,

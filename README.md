@@ -110,6 +110,8 @@ StatSim starts enabled unless `STATSIM_ENABLED=false` is set. Runtime changes fr
 
 ## Event Threads
 
+The booking panel is reused across restarts. Its message ID is saved in `settings.json`; existing panels are adopted automatically, and a new panel is posted only when none exists. The bot needs View Channel and Read Message History permissions to check for an existing panel.
+
 The bot checks the VATNZ calendar feed on startup and every 5 minutes.
 
 - Events inside the next 7 days get a staff prompt in the log channel.
