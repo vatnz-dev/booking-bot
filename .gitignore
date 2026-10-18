@@ -1,4 +1,5 @@
 .env
+db/
 event.json
 eventclose.json
 messages.json

@@ -37,7 +37,7 @@ Copy `.env.example` to `.env` in the project root, then fill in your real Discor
 DISCORD_TOKEN=your_bot_token_here
 CHANNEL_ID=your_booking_channel_id_here
 LOG_CHANNEL_ID=your_staff_log_channel_id_here
-STAFF_ROLE_ID=your_staff_role_id_here
+STAFF_ROLE_IDS=your_senior_staff_role_id,your_ops_staff_role_id,your_board_role_id
 EVENT_NOTIFICATIONS_ROLE_ID=your_event_notifications_role_id_here
 BOOKING_REMINDERS_ENABLED=true
 BOOKING_REMINDER_MINUTES=30
@@ -49,6 +49,8 @@ STATSIM_ENABLED=true
 STATSIM_TIMEOUT_MS=15000
 STATSIM_ZERO_FALLBACK_YEARS=3
 ```
+
+Set `STAFF_ROLE_IDS` to a comma-separated list of the Senior Staff, Ops Staff and Board Member role IDs. A member with any listed role has staff rights for deleting other controllers' bookings, managing event positions and event thread prompts, and toggling StatSim. Event thread prompts mention all configured staff roles. The legacy `STAFF_ROLE_ID` variable still works when `STAFF_ROLE_IDS` is unset or empty. If neither is configured, staff actions are denied.
 
 Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env`. Never commit `.env` or paste real server IDs into this README.
 
@@ -105,12 +107,14 @@ docker pull ghcr.io/vatnz-dev/booking-bot:latest
 docker run -d \
   --name vatnz-booking-bot \
   --restart unless-stopped \
-  --env DISCORD_TOKEN \
-  --env CHANNEL_ID \
+  --env-file .env \
+  --mount type=volume,source=vatnz-booking-db,target=/app/db \
   ghcr.io/vatnz-dev/booking-bot:latest
 ```
 
-Set `DISCORD_TOKEN` and `CHANNEL_ID` in the environment before running the command. The bot's JSON data files are stored inside the container and won't persist if the container is removed.
+Fill in `.env` before running the command. All six JSON databases live in `/app/db`; the named volume preserves them across container replacement and image updates. You can instead bind-mount a host directory to `/app/db` if it is writable by the image's `node` user (UID 1000).
+
+Before upgrading an existing container, stop it and copy its six root JSON files into the volume's root (or the host directory) before starting the new image. Runtime data and `.env` are excluded from the image build. Keep a backup of the old data until the upgraded bot is verified.
 
 ## Commands
 
@@ -121,18 +125,18 @@ Set `DISCORD_TOKEN` and `CHANNEL_ID` in the environment before running the comma
 - `/mentor mentor:@user` - Tag a mentor for a booking.
 - `/expectedtraffic position:NZCH_APP date:DD/MM start:HHMM end:HHMM` - Show expected previous-week traffic for the same NZ date/time window.
 - `/statsim mode:status|enable|disable reason:optional` - Staff only; toggle StatSim traffic lookups.
-- `/openeventposition` - Open an event-only position for a date.
-- `/closeeventposition` - Close an event-only position.
+- `/openeventposition` - Staff only; open an event-only position for a date.
+- `/closeeventposition` - Staff only; close an event-only position.
 
 Bookings shorter than 30 minutes are rejected.
 Controllers cannot create overlapping bookings, even at different positions or in different event threads. Back-to-back bookings are allowed.
 Booking reminders are sent by DM `BOOKING_REMINDER_MINUTES` minutes before start unless `BOOKING_REMINDERS_ENABLED=false`.
-StatSim starts enabled unless `STATSIM_ENABLED=false` is set. Runtime changes from `/statsim` are stored in `settings.json` and override the env default until changed again.
+StatSim starts enabled unless `STATSIM_ENABLED=false` is set. Runtime changes from `/statsim` are stored in `db/settings.json` and override the env default until changed again.
 Failed requests or unreadable StatSim traffic automatically disable lookups. The bot probes the traffic endpoint on startup and every `STATSIM_HEALTH_CHECK_MINUTES` (default 5), automatically re-enabling lookups after recovery. Valid zero counts are accepted as a healthy response. A staff `/statsim mode:disable` stays disabled until staff enable it again. During an outage, users see: "No StatSim data available at the moment due to server/bot errors."
 
 ## Event Threads
 
-The booking panel is reused across restarts. Its message ID is saved in `settings.json`; existing panels are adopted automatically, and a new panel is posted only when none exists. The bot needs View Channel and Read Message History permissions to check for an existing panel.
+The booking panel is reused across restarts. Its message ID is saved in `db/settings.json`; existing panels are adopted automatically, and a new panel is posted only when none exists. The bot needs View Channel and Read Message History permissions to check for an existing panel.
 
 The bot checks the VATNZ calendar feed on startup and every 5 minutes.
 
@@ -146,7 +150,7 @@ The bot checks the VATNZ calendar feed on startup and every 5 minutes.
 - If bookings are created, deleted, auto-deleted, or extended after the coverage embed posts, the bot edits that existing embed.
 - The coverage embed is deleted when the event finishes.
 - Event thread names use the format `Christchurch Control - 13th May`.
-- Existing overlapping bookings are reposted into the thread, original messages are deleted, and `messages.json` is updated.
+- Existing overlapping bookings are reposted into the thread, original messages are deleted, and `db/messages.json` is updated.
 - New overlapping bookings are posted directly into the event thread.
 - Event threads are deleted automatically 1 hour after the event end time.
 
@@ -157,15 +161,17 @@ The VATSIM ATC booking create/delete helpers and booking hooks are retained as c
 These files are created locally and ignored by git:
 
 - `.env`
-- `event.json`
-- `eventclose.json`
-- `endorsementwarnings.json`
-- `messages.json`
-- `eventthreads.json`
-- `settings.json`
+- `db/event.json`
+- `db/eventclose.json`
+- `db/endorsementwarnings.json`
+- `db/messages.json`
+- `db/eventthreads.json`
+- `db/settings.json`
 - `node_modules/`
 
-The bot creates missing runtime JSON files automatically with empty objects. Demo versions live in `examples/`:
+The bot creates `db/` and missing runtime JSON files automatically with empty objects. On a local upgrade, stop the old bot before starting this version: any root-level legacy JSON file is copied into `db/` only if its destination is missing. Original files remain as backups; existing `db/` data always takes precedence. Root-level legacy files remain ignored by git.
+
+Demo versions live in `examples/`:
 
 - `examples/event.demo.json`
 - `examples/eventclose.demo.json`
@@ -174,7 +180,7 @@ The bot creates missing runtime JSON files automatically with empty objects. Dem
 - `examples/eventthreads.demo.json`
 - `examples/settings.demo.json`
 
-Solo endorsement expiry warnings are sent to Discord users the bot can map to a VATSIM CID, currently users with bookings stored in `messages.json`.
+Solo endorsement expiry warnings are sent to Discord users the bot can map to a VATSIM CID, currently users with bookings stored in `db/messages.json`.
 
 ## Test Checklist
 

@@ -14,7 +14,7 @@ const {
   EVENT_NOTIFICATION_LEAD_MS,
   EVENT_NOTIFICATIONS_ROLE_ID,
   LOG_CHANNEL_ID,
-  STAFF_ROLE_ID,
+  STAFF_ROLE_IDS,
   THUMBS_UP,
   sectorCodeMap
 } = require('../constants');
@@ -342,7 +342,7 @@ function createEventThreadService({
     );
 
     const promptMessage = await logChannel.send({
-      content: STAFF_ROLE_ID ? `<@&${STAFF_ROLE_ID}> Event thread check required.` : 'Event thread check required.',
+      content: [...STAFF_ROLE_IDS.map(id => `<@&${id}>`), 'Event thread check required.'].join(' '),
       embeds: [buildEventEmbed(eventData, 'Create Event Thread?')],
       components: [row]
     });

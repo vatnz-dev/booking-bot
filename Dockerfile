@@ -9,6 +9,9 @@ RUN npm ci --omit=dev --no-audit --no-fund \
 
 COPY --chown=node:node . .
 
+RUN mkdir -p /app/db && chown node:node /app/db
+VOLUME ["/app/db"]
+
 USER node
 
 CMD ["npm", "start"]

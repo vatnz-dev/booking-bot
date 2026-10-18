@@ -8,7 +8,8 @@
 
   const { event, messages, eventclose, eventThreads, endorsementWarnings, settings } = require('./src/data/databases');
   const commandDefinitions = require('./src/commands/definitions');
-  const { STAFF_ROLE_ID } = require('./src/constants');
+  const { STAFF_ROLE_IDS } = require('./src/constants');
+  const { hasStaffRole } = require('./src/utils/permissions');
   const { getVatnzEventPositions } = require('./src/services/positions');
   const { createDiscordHelpers } = require('./src/services/discordHelpers');
   const { createAuditLogger } = require('./src/services/auditLog');
@@ -49,7 +50,7 @@
   };
 
   function isStaffMember(member) {
-    return Boolean(member?.roles?.cache?.has(STAFF_ROLE_ID));
+    return hasStaffRole(member, STAFF_ROLE_IDS);
   }
 
   const discordHelpers = createDiscordHelpers({ client });

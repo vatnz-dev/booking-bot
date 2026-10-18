@@ -947,6 +947,11 @@ function createInteractionHandlers({
   }
 
   async function handleOpenEventPosition(interaction) {
+    if (!isStaffMember(interaction.member)) {
+      await interaction.reply({ content: 'Only staff can open event positions.', ephemeral: true });
+      return;
+    }
+
     await interaction.deferReply({ ephemeral: true });
 
     const position = interaction.options.getString('position').trim().toUpperCase();
@@ -1123,6 +1128,11 @@ function createInteractionHandlers({
   }
 
   async function handleCloseEventPosition(interaction) {
+    if (!isStaffMember(interaction.member)) {
+      await interaction.reply({ content: 'Only staff can close event positions.', ephemeral: true });
+      return;
+    }
+
     await interaction.deferReply({ ephemeral: true });
 
     const position = interaction.options.getString('position').trim().toUpperCase();
