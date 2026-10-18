@@ -92,6 +92,26 @@ npm.cmd install
 npm.cmd start
 ```
 
+## Docker
+
+Releases are created automatically from commits pushed to `main`. The workflow analyzes Conventional Commit messages, creates a GitHub release and semver tag when appropriate, then builds and publishes the image to GitHub Container Registry. It does not publish this project to npm.
+
+Use commit messages such as `fix: handle empty booking lists` for a patch release or `feat: add booking export` for a minor release. Add `BREAKING CHANGE:` to the commit footer for a major release. Commits that do not indicate a feature, fix, or breaking change will not trigger a release. Manually pushed `v*.*.*` tags also publish an image.
+
+Semver releases publish version tags (for example, `v1.2.3`, `1.2.3`, `1.2`, `1`) and `latest`. The package's visibility is managed in GitHub Packages settings; newly published packages may be private.
+
+```bash
+docker pull ghcr.io/vatnz-dev/booking-bot:latest
+docker run -d \
+  --name vatnz-booking-bot \
+  --restart unless-stopped \
+  --env DISCORD_TOKEN \
+  --env CHANNEL_ID \
+  ghcr.io/vatnz-dev/booking-bot:latest
+```
+
+Set `DISCORD_TOKEN` and `CHANNEL_ID` in the environment before running the command. The bot's JSON data files are stored inside the container and won't persist if the container is removed.
+
 ## Commands
 
 - `/viewbookings` - View your current bookings.
