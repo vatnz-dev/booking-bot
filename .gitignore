@@ -1,4 +1,10 @@
 .env
+db/
+event.json
+eventclose.json
 messages.json
+eventthreads.json
+endorsementwarnings.json
+settings.json
 node_modules
 

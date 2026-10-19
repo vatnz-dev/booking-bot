@@ -1,0 +1,13 @@
+{
+  "bookingPanel": {
+    "channelId": "444444444444444444",
+    "messageId": "333333333333333333"
+  },
+  "statsim": {
+    "enabled": true,
+    "autoDisabled": false,
+    "reason": null,
+    "updatedAt": null,
+    "updatedBy": null
+  }
+}

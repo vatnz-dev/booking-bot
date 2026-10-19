@@ -1,0 +1,33 @@
+{
+  "222222222222222222": [
+    {
+      "position": "NZCH_APP",
+      "date": "25/06",
+      "start": 1800,
+      "end": 2000,
+      "messageId": "333333333333333333",
+      "channelId": "444444444444444444",
+      "guildId": "555555555555555555",
+      "threadId": null,
+      "eventUid": null,
+      "eventName": null,
+      "extendedSectors": [],
+      "awaitingExtensionSelection": false,
+      "mentorRequired": false,
+      "mentorId": null,
+      "mentorApproved": false,
+      "reminderMinutes": 30,
+      "reminderSentAt": null,
+      "soloEndorsement": {
+        "source": "solo",
+        "scope": "NZCH_APP",
+        "endDate": "25/07/2026",
+        "endDateISO": "2026-07-25",
+        "url": "https://www.vatnz.net/controllers/endorsements/approved-solo-endorsements/"
+      },
+      "startUtc": "2026-06-25T06:00:00.000Z",
+      "endUtc": "2026-06-25T08:00:00.000Z",
+      "createdAt": "2026-06-01T00:00:00.000Z"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "ZGVtby1ldmVudC11aWQ": {
+    "status": "created",
+    "threadId": "666666666666666666",
+    "threadChannelId": "666666666666666666",
+    "parentChannelId": "444444444444444444",
+    "event": {
+      "uid": "demo-event-uid",
+      "title": "Christchurch Control",
+      "startUtcISO": "2026-06-25T06:00:00.000Z",
+      "endUtcISO": "2026-06-25T08:00:00.000Z",
+      "url": "https://www.vatnz.net/events/demo",
+      "categories": ["Night Shift", "VATNZ"]
+    },
+    "source": "auto",
+    "createdBy": null,
+    "notificationMessageId": "777777777777777777",
+    "notificationChannelId": "444444444444444444",
+    "notificationPostedAt": "2026-06-25T05:00:00.000Z",
+    "notificationDeletedAt": "2026-06-25T08:00:00.000Z",
+    "createdAt": "2026-06-01T00:00:00.000Z",
+    "movedBookings": [],
+    "updatedAt": "2026-06-01T00:00:00.000Z"
+  }
+}
