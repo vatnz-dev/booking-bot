@@ -102,6 +102,17 @@ Use commit messages such as `fix: handle empty booking lists` for a patch releas
 
 Semver releases publish version tags (for example, `v1.2.3`, `1.2.3`, `1.2`, `1`) and `latest`. The package's visibility is managed in GitHub Packages settings; newly published packages may be private.
 
+Fill in `.env`, then start the bot with Docker Compose:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+The Compose file uses the `vatnz-booking-db` named volume for persistent database files. Stop the bot with `docker compose down`; the volume and its data are kept.
+
+To run the image directly instead:
+
 ```bash
 docker pull ghcr.io/vatnz-dev/booking-bot:latest
 docker run -d \
