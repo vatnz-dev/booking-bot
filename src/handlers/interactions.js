@@ -20,7 +20,7 @@ const {
   sectorCodeMap
 } = require('../constants');
 const {
-  convertToUTC,
+  resolveBookingWindow,
   DateTime,
   formatBookingDateForDiscord,
   formatBookingEndForDiscord,
@@ -34,6 +34,8 @@ const {
   parseHhmm,
   toDiscordTimestamp
 } = require('../utils/time');
+const { createBookingMutationQueue } = require('../utils/bookingMutations');
+const { isEligibleMentor } = require('../utils/mentor');
 const { cleanEmbedValue } = require('../utils/format');
 const { createEditBookingHandlers } = require('./editBookings');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
@@ -56,7 +58,6 @@ const {
   endorsementCoversDate,
   fetchSoloEndorsements,
   formatEndorsementScope,
-  getBookingStartNz
 } = require('../services/soloEndorsements');
 
 function getBookingDateDisplay(booking) {
@@ -125,17 +126,10 @@ function createInteractionHandlers({
   fetchBookingMessage,
   sendAuditLog,
   eventThreadService,
-  bookingLifecycle
+  bookingLifecycle,
+  runBookingMutation = createBookingMutationQueue()
 }) {
   const buttonCooldowns = new Map();
-  // Serialize booking changes across controllers, including async Discord sends,
-  // so a second submission sees the first submission's committed sectors.
-  let bookingMutation = Promise.resolve();
-  function runBookingMutation(action) {
-    const next = bookingMutation.then(action);
-    bookingMutation = next.catch(() => {});
-    return next;
-  }
   const editHandlers = createEditBookingHandlers({ client, messages, event, isStaffMember, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation });
   const {
     clearMentorTimers,
@@ -245,10 +239,10 @@ function createInteractionHandlers({
       return;
     }
 
-    const options = userBookings.slice(0, 25).map((b, index) => ({
+    const options = userBookings.slice(0, 25).map(b => ({
       label: `${b.position} on ${b.date} at ${b.start}`,
       description: `Ends at ${b.end}`,
-      value: `${targetUserId}|${index}`
+      value: `${targetUserId}|id:${b.messageId}`
     }));
 
     const row = new ActionRowBuilder().addComponents(
@@ -376,10 +370,7 @@ function createInteractionHandlers({
 
   async function deleteBookingSelection(interaction) {
     const userId = String(interaction.member.user.id);
-    const [targetUserFromValue, selectedIndexFromValue] = String(interaction.values[0]).includes('|')
-      ? interaction.values[0].split('|')
-      : [userId, interaction.values[0]];
-    const selectedIndex = parseInt(selectedIndexFromValue, 10);
+    const [targetUserFromValue, identity] = String(interaction.values[0]).split('|');
     const targetUserId = String(targetUserFromValue);
     const staff = isStaffMember(interaction.member);
 
@@ -392,8 +383,10 @@ function createInteractionHandlers({
     }
 
     const userBookings = messages.get(targetUserId);
+    const selectedIndex = identity?.startsWith('id:') && Array.isArray(userBookings)
+      ? userBookings.findIndex(b => b.messageId === identity.slice(3)) : -1;
 
-    if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
+    if (selectedIndex < 0) {
       await interaction.editReply({
         content: '\u274C Booking not found.',
         components: []
@@ -528,6 +521,9 @@ function createInteractionHandlers({
         return;
       }
 
+      const window = resolveBookingWindow(date, startRaw, endRaw);
+      if (!window) return i.editReply({ content: 'Choose a valid future start time and an end time later on the same NZ day.', ephemeral: true });
+
       const positionValidation = await validateVatnzPosition(pos);
       if (!positionValidation.valid) {
         return i.editReply({ content: `\u274C ${positionValidation.reason}`, ephemeral: true });
@@ -553,7 +549,7 @@ function createInteractionHandlers({
         return i.editReply({ content: '\u274C Could not retrieve your VATSIM ID. Please ensure your Discord is linked Here: https://community.vatsim.net/', ephemeral: true });
       }
 
-      const bookingDateNz = getBookingStartNz(date, startRaw);
+      const bookingDateNz = window.startNz;
       const baseEligibility = evaluateBookingEligibility(member, pos);
       const eligibility = await applySoloEndorsementOverride({
         baseEligibility,
@@ -569,8 +565,8 @@ function createInteractionHandlers({
       const soloEndorsement = eligibility.soloEndorsement || null;
 
       const rawDB = messages.all();
-      const startUTC = convertToUTC(date, startRaw);
-      const endUTC = convertToUTC(date, endRaw);
+      const startUTC = window.startUtc;
+      const endUTC = window.endUtc;
       const bookingDisplayRecord = { date, start, end, startUtc: startUTC, endUtc: endUTC };
       const ownConflict = findOverlappingBooking(messages.get(userId), bookingDisplayRecord);
       if (ownConflict) {
@@ -584,94 +580,11 @@ function createInteractionHandlers({
       const newBookingSectors = [pos, ...extendedSectors];
 
       for (const entry of rawDB) {
-        const conflictOwnerId = String(entry.key);
-        const bookings = entry.data;
-        if (!Array.isArray(bookings)) continue;
-
-        for (const b of bookings) {
-          if (b.date !== date || b.position !== pos) continue;
-          const bStart = parseInt(b.start);
-          const bEnd = parseInt(b.end);
-          const timeOverlap = !(end <= bStart || start >= bEnd);
-          if (timeOverlap) {
-            return i.editReply({ content: formatBookingConflict(pos, conflictOwnerId, b), ephemeral: true });
-          }
-        }
-      }
-
-      for (const entry of rawDB) {
-        const bookings = entry.data;
-        const otherUserId = entry.key;
-        if (!Array.isArray(bookings)) continue;
-
-        for (const b of bookings) {
-          if (!Array.isArray(b.extendedSectors)) continue;
-          if (b.date !== date) continue;
-
-          const bStart = parseInt(b.start);
-          const bEnd = parseInt(b.end);
-          const timeOverlap = !(end <= bStart || start >= bEnd);
-          if (!timeOverlap) continue;
-
-          const original = [...b.extendedSectors];
-          const removedSectors = original.filter(s => newBookingSectors.includes(s));
-          b.extendedSectors = b.extendedSectors.filter(s => !newBookingSectors.includes(s));
-
-          if (removedSectors.length > 0) {
-            try {
-              const msg = await fetchBookingMessage(b);
-              if (!msg) throw new Error('Booking message not found');
-              const embed = msg.embeds[0];
-              const newEmbed = new EmbedBuilder()
-                .setColor(embed.color)
-                .setTitle(embed.title)
-                .setTimestamp()
-                .setThumbnail(embed.thumbnail?.url)
-                .setFooter(embed.footer?.text ? { text: embed.footer.text } : null);
-
-              for (const field of embed.fields) {
-                if (field.name !== 'Extended Sectors') {
-                  newEmbed.addFields({ name: field.name, value: field.value, inline: field.inline });
-                }
-              }
-
-              if (b.extendedSectors.length > 0) {
-                const display = b.extendedSectors.map(s => sectorCodeMap[s] || s);
-                newEmbed.addFields({ name: 'Extended Sectors', value: display.join(', '), inline: false });
-              }
-
-              await msg.edit({ embeds: [newEmbed] });
-            } catch (err) {
-              console.warn(`\u26A0\uFE0F Could not update embed for booking ${b.messageId}`);
-            }
-
-            try {
-              const user = await client.users.fetch(otherUserId);
-              const reason = otherUserId === userId
-                ? 'You booked a new session that overrides these sectors.'
-                : 'Another controller booked or inherited these sectors.';
-
-              await user.send({
-                content: `\u{1F4ED} One or more extended sectors were removed from your booking.`,
-                embeds: [
-                  new EmbedBuilder()
-                    .setColor('#FF0000')
-                    .setTitle('Extended Sectors Removed')
-                    .setDescription(
-                      `The following sectors were removed from your booking ${getBookingWindowDisplay(b)}:\n` +
-                      removedSectors.map(s => `\u2022 ${sectorCodeMap[s] || s}`).join('\n') +
-                      `\n\nReason: ${reason}`
-                    )
-                    .setFooter({ text: 'VATNZ Booking System' })
-                ]
-              });
-            } catch (err) {
-              console.warn(`\u26A0\uFE0F Could not DM user ${otherUserId}: ${err}`);
-            }
-
-            messages.set(otherUserId, bookings);
-            await refreshEventCoverageNotificationsForBooking(b);
-          }
+        const bookings = Array.isArray(entry.data) ? entry.data : [];
+        for (const booking of bookings) {
+          if (!findOverlappingBooking([booking], bookingDisplayRecord)) continue;
+          const occupied = [booking.position, ...(booking.extendedSectors || [])].find(sector => newBookingSectors.includes(sector));
+          if (occupied) return i.editReply({ content: formatBookingConflict(occupied, entry.key, booking), ephemeral: true });
         }
       }
 
@@ -791,11 +704,7 @@ function createInteractionHandlers({
           if (!Array.isArray(bookings)) continue;
 
           for (const b of bookings) {
-            if (b.date !== date) continue;
-            const bStart = parseInt(b.start);
-            const bEnd = parseInt(b.end);
-            const timeOverlap = !(end <= bStart || start >= bEnd);
-            if (!timeOverlap) continue;
+            if (!findOverlappingBooking([b], bookingDisplayRecord)) continue;
 
             unavailable.add(b.position);
             if (Array.isArray(b.extendedSectors)) {
@@ -1061,11 +970,7 @@ function createInteractionHandlers({
         if (!Array.isArray(bookings)) continue;
 
         for (const b of bookings) {
-          if (b.date !== booking.date) continue;
-          const bStart = parseInt(b.start);
-          const bEnd = parseInt(b.end);
-          const timeOverlap = !(booking.end <= bStart || booking.start >= bEnd);
-          if (!timeOverlap) continue;
+          if (!findOverlappingBooking([b], booking)) continue;
 
           unavailable.add(b.position);
           if (Array.isArray(b.extendedSectors)) {
@@ -1188,16 +1093,27 @@ function createInteractionHandlers({
   async function handleMentorBookingSelect(interaction) {
     await interaction.deferUpdate();
 
-    const [selectedIndex, mentorId] = interaction.values[0].split('|');
+    return runBookingMutation(() => mentorBookingSelection(interaction));
+  }
+
+  async function mentorBookingSelection(interaction) {
+    const [identity, mentorId] = interaction.values[0].split('|');
     const userId = String(interaction.member.user.id);
     const userBookings = messages.get(userId);
 
-    if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
+    const selectedIndex = identity?.startsWith('id:') && Array.isArray(userBookings)
+      ? userBookings.findIndex(b => b.messageId === identity.slice(3)) : -1;
+    if (selectedIndex < 0) {
       await interaction.editReply({
         content: '\u274C Booking not found.',
         components: []
       });
       return;
+    }
+
+    const mentor = await interaction.guild?.members.fetch(mentorId).catch(() => null);
+    if (!isEligibleMentor(mentor, userId)) {
+      return interaction.editReply({ content: 'Select another controller with a configured mentor or instructor role.', components: [] });
     }
 
     const booking = userBookings[selectedIndex];
@@ -1285,6 +1201,9 @@ function createInteractionHandlers({
   async function handleMentor(interaction) {
     const userId = String(interaction.member.user.id);
     const mentor = interaction.options.getMember('mentor');
+    if (!isEligibleMentor(mentor, userId)) {
+      return interaction.reply({ content: 'Select another controller with a configured mentor or instructor role.', ephemeral: true });
+    }
     const userBookings = messages.get(userId);
 
     if (!Array.isArray(userBookings) || userBookings.length === 0) {
@@ -1295,10 +1214,10 @@ function createInteractionHandlers({
       return;
     }
 
-    const options = userBookings.map((b, index) => ({
+    const options = userBookings.slice(0, 25).map(b => ({
       label: `${b.position} on ${b.date} at ${b.start}`,
       description: `Ends at ${b.end}`,
-      value: `${index}|${mentor.id}`
+      value: `id:${b.messageId}|${mentor.id}`
     }));
 
     const row = new ActionRowBuilder().addComponents(

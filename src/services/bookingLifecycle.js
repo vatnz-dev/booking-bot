@@ -1,3 +1,5 @@
+const { createBookingMutationQueue } = require('../utils/bookingMutations');
+const { isEligibleMentor } = require('../utils/mentor');
 const { EmbedBuilder } = require('discord.js');
 
 const {
@@ -26,6 +28,7 @@ function createBookingLifecycle({
   fetchBookingMessage,
   getBookingMessageLink = () => null,
   sendAuditLog,
+  runBookingMutation = createBookingMutationQueue(),
   refreshEventCoverageNotificationsForBooking = async () => {}
 }) {
   const mentorTagTimeouts = new Map();
@@ -78,7 +81,7 @@ function createBookingLifecycle({
 
   function scheduleExtensionSelectionTimeout(ownerId, messageId) {
     clearExtensionSelectionTimer(messageId);
-    const timeout = setTimeout(async () => {
+    const timeout = setTimeout(() => runBookingMutation(async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking) return;
       if (!entry.booking.awaitingExtensionSelection) return;
@@ -104,7 +107,7 @@ function createBookingLifecycle({
       } catch (err) {
         console.warn(`\u26A0\uFE0F Could not DM user ${ownerId} with fallback extension stats:`, err?.message || err);
       }
-    }, 3 * 60 * 1000);
+    }).catch(err => console.warn('Extension timeout failed:', err?.message || err)), 3 * 60 * 1000);
 
     extensionSelectionTimeouts.set(messageId, timeout);
   }
@@ -149,7 +152,7 @@ function createBookingLifecycle({
 
   function scheduleMentorTagTimeout(ownerId, messageId, delayMs = MENTOR_TAG_TIMEOUT_MS) {
     clearMentorTimers(messageId);
-    const timeout = setTimeout(async () => {
+    const timeout = setTimeout(() => runBookingMutation(async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking.mentorRequired) return;
       if (entry.booking.mentorId) return;
@@ -160,7 +163,7 @@ function createBookingLifecycle({
         auditAction: 'Mentor Tag Timeout Auto-Delete',
         auditReason: 'Controller did not tag a mentor within 5 minutes'
       });
-    }, Math.max(1000, delayMs));
+    }).catch(err => console.warn('Mentor timeout failed:', err?.message || err)), Math.max(1000, delayMs));
     mentorTagTimeouts.set(messageId, timeout);
   }
 
@@ -168,7 +171,7 @@ function createBookingLifecycle({
     const existing = mentorApprovalTimeouts.get(messageId);
     if (existing) clearTimeout(existing);
 
-    const timeout = setTimeout(async () => {
+    const timeout = setTimeout(() => runBookingMutation(async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking.mentorRequired) return;
       if (entry.booking.mentorApproved) return;
@@ -179,7 +182,7 @@ function createBookingLifecycle({
         auditAction: 'Mentor Approval Timeout Auto-Delete',
         auditReason: 'Mentor did not approve within 30 minutes'
       });
-    }, Math.max(1000, delayMs));
+    }).catch(err => console.warn('Mentor timeout failed:', err?.message || err)), Math.max(1000, delayMs));
     mentorApprovalTimeouts.set(messageId, timeout);
   }
 
@@ -269,7 +272,7 @@ function createBookingLifecycle({
         return;
       }
 
-      sendBookingReminder(ownerId, booking.messageId).catch(err => {
+      runBookingMutation(() => sendBookingReminder(ownerId, booking.messageId)).catch(err => {
         console.warn('Booking reminder failed:', err?.message || err);
       });
     }, cappedDelayMs);
@@ -281,7 +284,7 @@ function createBookingLifecycle({
     scheduleBookingReminder(ownerId, booking);
   }
 
-  function rescheduleAllBookingReminders() {
+  function rescheduleAllBookingTimers() {
     for (const entry of messages.all()) {
       const ownerId = String(entry.key);
       const bookings = entry.data;
@@ -289,6 +292,7 @@ function createBookingLifecycle({
 
       for (const booking of bookings) {
         rescheduleBookingReminder(ownerId, booking);
+        rescheduleMentorTimers(ownerId, booking);
       }
     }
   }
@@ -305,7 +309,10 @@ function createBookingLifecycle({
       if (!entry) return;
       const booking = entry.booking;
       if (!booking.mentorRequired || !booking.mentorId || booking.mentorApproved) return;
-      if (user.id !== booking.mentorId) return;
+      if (user.id !== booking.mentorId || String(user.id) === String(entry.ownerId)) return;
+      const guild = reaction.message.guild;
+      const mentor = await guild?.members.fetch(user.id).catch(() => null);
+      if (!isEligibleMentor(mentor, entry.ownerId)) return;
 
       booking.mentorApproved = true;
       booking.mentorApprovedAt = new Date().toISOString();
@@ -365,7 +372,11 @@ function createBookingLifecycle({
     return endNz;
   }
 
-  async function cleanupExpiredBookings() {
+  function cleanupExpiredBookings() {
+    return runBookingMutation(cleanupExpiredBookingsUnlocked);
+  }
+
+  async function cleanupExpiredBookingsUnlocked() {
     const nowNz = DateTime.now().setZone('Pacific/Auckland');
 
     for (const entry of messages.all()) {
@@ -413,7 +424,7 @@ function createBookingLifecycle({
 
   function startBookingCleanupScheduler() {
     if (bookingCleanupInterval) return;
-    rescheduleAllBookingReminders();
+    rescheduleAllBookingTimers();
     cleanupExpiredBookings().catch(err => console.warn('Booking cleanup failed:', err?.message || err));
     bookingCleanupInterval = setInterval(() => {
       cleanupExpiredBookings().catch(err => console.warn('Booking cleanup failed:', err?.message || err));
@@ -426,15 +437,16 @@ function createBookingLifecycle({
     clearBookingReminderTimer,
     findBookingByMessageId,
     scheduleExtensionSelectionTimeout,
-    removeBookingAndNotify,
+    removeBookingAndNotify: options => runBookingMutation(() => removeBookingAndNotify(options)),
     scheduleMentorTagTimeout,
     scheduleMentorApprovalTimeout,
     remainingFromTimestamp,
     rescheduleMentorTimers,
     scheduleBookingReminder,
     rescheduleBookingReminder,
-    rescheduleAllBookingReminders,
-    handleMentorApprovalReaction,
+    rescheduleAllBookingTimers,
+    rescheduleAllBookingReminders: rescheduleAllBookingTimers,
+    handleMentorApprovalReaction: (reaction, user) => runBookingMutation(() => handleMentorApprovalReaction(reaction, user)),
     getBookingEndForCleanup,
     cleanupExpiredBookings,
     startBookingCleanupScheduler

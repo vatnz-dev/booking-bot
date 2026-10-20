@@ -64,6 +64,8 @@ Set `STAFF_ROLE_IDS` to a comma-separated list of the Senior Staff, Ops Staff an
 
 Set the rating role variables (`S1_ROLE_ID` through `I3_ROLE_ID`) to your server's corresponding controller roles. These control booking eligibility and rating labels on booking embeds. Set `FSS_ROLE_ID` to the role allowed to book FSS positions. Missing rating roles are ignored; a missing FSS role denies FSS bookings. Restart the bot after changing role configuration.
 
+Mentors must be another human member with an I1 or I3 role. To authorize other mentor roles, set `MENTOR_ROLE_IDS` to a comma-separated list of role IDs; this replaces the I1/I3 defaults. The bot checks the role when tagging and approving, and restores pending mentor deadlines after a restart. Existing deployments should configure their mentor roles before upgrading.
+
 Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env`. Never commit `.env` or paste real server IDs into this README.
 
 ## Project Layout
@@ -154,7 +156,8 @@ Before upgrading an existing container, stop it and copy its six root JSON files
 - `/closeeventposition` - Staff only; close an event-only position.
 
 Bookings shorter than 30 minutes are rejected.
-Controllers cannot create overlapping bookings, even at different positions or in different event threads. Back-to-back bookings are allowed.
+New bookings must start in the future. Both endpoints use the same NZ calendar date and year. An active booking may still be edited on its existing date, provided its end remains in the future.
+Controllers cannot create overlapping bookings, even at different positions or in different event threads. Main, inherited and optional sectors are checked together; a new booking cannot take coverage from another booking. Back-to-back bookings are allowed.
 Booking reminders are sent by DM `BOOKING_REMINDER_MINUTES` minutes before start unless `BOOKING_REMINDERS_ENABLED=false`.
 StatSim starts enabled unless `STATSIM_ENABLED=false` is set. Runtime changes from `/statsim` are stored in `db/settings.json` and override the env default until changed again.
 Failed requests or unreadable StatSim traffic automatically disable lookups. The bot probes the traffic endpoint on startup and every `STATSIM_HEALTH_CHECK_MINUTES` (default 5), automatically re-enabling lookups after recovery. Valid zero counts are accepted as a healthy response. A staff `/statsim mode:disable` stays disabled until staff enable it again. During an outage, users see: "No StatSim data available at the moment due to server/bot errors."

@@ -40,6 +40,20 @@ function buildNzDateTime(dateStr, timeStr, year) {
   return value.isValid ? value : null;
 }
 
+// Resolve the NZ date once so start and end always belong to the same day.
+function resolveBookingWindow(date, start, end, existing = null) {
+  const now = DateTime.now().setZone(NZ_ZONE);
+  const stored = existing && date === existing.date ? getBookingDisplayInterval(existing) : null;
+  let startNz = buildNzDateTime(date, start, stored?.startNz.year || now.year);
+  if (!startNz) return null;
+  if (!stored && startNz.startOf('day') < now.startOf('day')) startNz = startNz.plus({ years: 1 });
+  const endNz = buildNzDateTime(date, end, startNz.year);
+  const active = stored && stored.startNz <= now && stored.endNz > now;
+  if (!endNz || endNz <= startNz || endNz <= now || (!active && startNz < now)) return null;
+  if (startNz.toFormat('HHmm') !== parseHhmm(start)?.raw || endNz.toFormat('HHmm') !== parseHhmm(end)?.raw) return null;
+  return { startNz, endNz, startUtc: startNz.toUTC().toISO(), endUtc: endNz.toUTC().toISO() };
+}
+
 function getBookingIntervalNz(booking, year) {
   const startNz = buildNzDateTime(booking?.date, booking?.start, year);
   const endNz = buildNzDateTime(booking?.date, booking?.end, year);
@@ -214,6 +228,7 @@ module.exports = {
   parseHhmm,
   getDurationMinutes,
   buildNzDateTime,
+  resolveBookingWindow,
   getBookingIntervalNz,
   getBookingDisplayInterval,
   toDiscordTimestamp,
