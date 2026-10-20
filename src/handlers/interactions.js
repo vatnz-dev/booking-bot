@@ -1113,7 +1113,7 @@ function createInteractionHandlers({
 
     const mentor = await interaction.guild?.members.fetch(mentorId).catch(() => null);
     if (!isEligibleMentor(mentor, userId)) {
-      return interaction.editReply({ content: 'Select another controller with a configured mentor role.', components: [] });
+      return interaction.editReply({ content: 'Select another controller with a configured staff or mentor role.', components: [] });
     }
 
     const booking = userBookings[selectedIndex];
@@ -1202,7 +1202,7 @@ function createInteractionHandlers({
     const userId = String(interaction.member.user.id);
     const mentor = interaction.options.getMember('mentor');
     if (!isEligibleMentor(mentor, userId)) {
-      return interaction.reply({ content: 'Select another controller with a configured mentor role.', ephemeral: true });
+      return interaction.reply({ content: 'Select another controller with a configured staff or mentor role.', ephemeral: true });
     }
     const userBookings = messages.get(userId);
 

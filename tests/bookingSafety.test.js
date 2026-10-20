@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { DateTime, Settings } = require('luxon');
 process.env.I1_ROLE_ID = 'instructor';
 process.env.I3_ROLE_ID = 'senior-instructor';
-process.env.MENTOR_ROLE_ID = 'mentor-role';
+process.env.STAFF_ROLE_IDS = 'staff-role,mentor-role';
 const fixedNow = DateTime.fromISO('2026-10-20T19:00:00+13:00').toMillis();
 Settings.now = () => fixedNow;
 const stub = (path, exports) => { require.cache[require.resolve(path)] = { exports, loaded: true }; };
@@ -63,21 +63,13 @@ test('delete picker keeps identity after a preceding booking disappears and reje
   assert.deepEqual(f.data.owner.map(b => b.messageId), ['C']);
 });
 
-test('mentor role is required, trims whitespace and never falls back to I1 or I3', () => {
+test('mentor permissions use STAFF_ROLE_IDS, including its mentor entry, without I1/I3 fallback', () => {
   assert.equal(isEligibleMentor(member('owner', ['mentor-role']), 'owner'), false);
   assert.equal(isEligibleMentor(member('bot', ['mentor-role'], true), 'owner'), false);
   assert.equal(isEligibleMentor(member('other'), 'owner'), false);
   assert.equal(isEligibleMentor(member('other', ['mentor-role']), 'owner'), true);
+  assert.equal(isEligibleMentor(member('staff', ['staff-role']), 'owner'), true);
   assert.equal(isEligibleMentor(member('other', ['instructor', 'senior-instructor']), 'owner'), false);
-  try {
-    process.env.MENTOR_ROLE_ID = ' mentor-role ';
-    assert.equal(isEligibleMentor(member('other', ['mentor-role']), 'owner'), true);
-    for (const value of ['', '   ', undefined]) {
-      if (value === undefined) delete process.env.MENTOR_ROLE_ID;
-      else process.env.MENTOR_ROLE_ID = value;
-      assert.equal(isEligibleMentor(member('other', ['mentor-role', 'instructor', 'senior-instructor']), 'owner'), false);
-    }
-  } finally { process.env.MENTOR_ROLE_ID = 'mentor-role'; }
 });
 
 test('mentor selection uses stable identity and checks current membership roles', async () => {
