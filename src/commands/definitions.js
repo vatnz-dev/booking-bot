@@ -15,6 +15,16 @@ module.exports = [
     description: 'View your VATNZ solo and S1 endorsements.'
   },
   {
+    name: 'editbookings',
+    description: 'Edit a booking, including its position, date, times and extra sectors.',
+    options: [{
+      type: 6,
+      name: 'controller',
+      description: 'Staff only: edit another controller booking.',
+      required: false
+    }]
+  },
+  {
     name: 'deletebookings',
     description: 'Delete your controller bookings.',
     options: [

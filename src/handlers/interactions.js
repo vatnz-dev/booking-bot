@@ -35,6 +35,7 @@ const {
   toDiscordTimestamp
 } = require('../utils/time');
 const { cleanEmbedValue } = require('../utils/format');
+const { createEditBookingHandlers } = require('./editBookings');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
 const {
   resolveAerodromes,
@@ -127,6 +128,15 @@ function createInteractionHandlers({
   bookingLifecycle
 }) {
   const buttonCooldowns = new Map();
+  // Serialize booking changes across controllers, including async Discord sends,
+  // so a second submission sees the first submission's committed sectors.
+  let bookingMutation = Promise.resolve();
+  function runBookingMutation(action) {
+    const next = bookingMutation.then(action);
+    bookingMutation = next.catch(() => {});
+    return next;
+  }
+  const editHandlers = createEditBookingHandlers({ client, messages, event, isStaffMember, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation });
   const {
     clearMentorTimers,
     clearExtensionSelectionTimer,
@@ -361,7 +371,10 @@ function createInteractionHandlers({
 
   async function handleDeleteBookingSelect(interaction) {
     await interaction.deferUpdate();
+    return runBookingMutation(() => deleteBookingSelection(interaction));
+  }
 
+  async function deleteBookingSelection(interaction) {
     const userId = String(interaction.member.user.id);
     const [targetUserFromValue, selectedIndexFromValue] = String(interaction.values[0]).includes('|')
       ? interaction.values[0].split('|')
@@ -437,7 +450,9 @@ function createInteractionHandlers({
     }
     pendingBookingUsers.add(userId);
     try {
-      return await handlePlanInteraction(i);
+      // Acknowledge before waiting for another controller's mutation.
+      await i.deferReply({ ephemeral: true });
+      return await runBookingMutation(() => handlePlanInteraction(i));
     } finally {
       pendingBookingUsers.delete(userId);
     }
@@ -445,7 +460,6 @@ function createInteractionHandlers({
 
   async function handlePlanInteraction(i) {
     if (i.isModalSubmit()) {
-      await i.deferReply({ ephemeral: true });
 
       const member = i.member;
       const userId = member.user.id;
@@ -941,7 +955,7 @@ function createInteractionHandlers({
           `\u2022 **${b.position}**: ${getBookingWindowDisplay(b)}`
         ).join('\n')
       )
-      .setFooter({ text: 'Use /deletebookings to remove a booking.' });
+      .setFooter({ text: 'Use /editbookings to change a booking or /deletebookings to remove one.' });
 
     await interaction.reply({ embeds: [embed], ephemeral: true });
   }
@@ -1002,8 +1016,12 @@ function createInteractionHandlers({
   }
 
   async function handleExtendSectorSelect(interaction) {
+    await interaction.deferUpdate();
+    return runBookingMutation(() => extendSectorSelection(interaction));
+  }
+
+  async function extendSectorSelection(interaction) {
     try {
-      await interaction.deferUpdate();
 
       const selections = interaction.values;
       const userId = String(interaction.member.user.id);
@@ -1013,6 +1031,9 @@ function createInteractionHandlers({
       const [messageId] = selections[0].split('|');
       const booking = userBookings.find(b => b.messageId === messageId || (Array.isArray(b.previousMessageIds) && b.previousMessageIds.includes(messageId)));
       if (!booking) return;
+      if (!booking.awaitingExtensionSelection) {
+        return interaction.editReply({ content: 'This sector selection is no longer active. Use /editbookings to change sectors.', components: [] });
+      }
 
       if (selections.includes(`${messageId}|NO_EXTENSION`)) {
         clearExtensionSelectionTimer(messageId);
@@ -1305,6 +1326,9 @@ function createInteractionHandlers({
             case 'deletebookings':
               await handleDeleteBookings(interaction);
               break;
+            case 'editbookings':
+              await editHandlers.handleEditBookings(interaction);
+              break;
             case 'expectedtraffic':
               await handleExpectedTraffic(interaction);
               break;
@@ -1346,6 +1370,9 @@ function createInteractionHandlers({
             case 'delete_booking_select':
               await handleDeleteBookingSelect(interaction);
               break;
+            case 'edit_booking_select':
+              await editHandlers.handleEditBookingSelect(interaction);
+              break;
             case 'extend_sector_select':
               await handleExtendSectorSelect(interaction);
               break;
@@ -1357,6 +1384,10 @@ function createInteractionHandlers({
         }
 
         if (interaction.isModalSubmit()) {
+          if (interaction.customId.startsWith('edit_booking:')) {
+            await editHandlers.handleEditBookingSubmit(interaction);
+            return;
+          }
           switch (interaction.customId) {
             case 'plan':
               await handlePlan(interaction);
@@ -1380,6 +1411,7 @@ function createInteractionHandlers({
   }
 
   return {
+    ...editHandlers,
     registerInteractionHandlers,
     handleMyEndorsements,
     handleDeleteBookings,

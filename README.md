@@ -8,9 +8,11 @@ VATNZ ATC Booking Bot is a Discord bot for controller booking, mentoring workflo
 - Require booking sessions to be at least 30 minutes long.
 - DM booking reminders before sessions start.
 - Explain booking conflicts with the conflicting controller and time window.
-- View and delete bookings with `/viewbookings` and `/deletebookings`.
+- View, edit and delete bookings with `/viewbookings`, `/editbookings` and `/deletebookings`.
+- Edit the position, NZ date, times and extra sectors from a prefilled form, with availability and eligibility checked before saving.
+- Staff can use `/editbookings controller:@user` to edit another controller's booking using that controller's eligibility.
 - Staff can use `/deletebookings controller:@user` to delete another controller's booking.
-- Log booking creates, deletes, mentor actions, auto-deletes, event prompts, event thread creation, and event booking moves.
+- Log booking creates, edits, deletes, mentor actions, auto-deletes, event prompts, event thread creation, and event booking moves.
 - Fetch VATNZ events from the official calendar feed and create event threads.
 - Automatically create Christchurch Control event threads based on the event name, including the current VATNZ feed typo `Chrsitchurch Control`.
 - Post event coverage notifications in the booking/events channel 1 hour before event start.
@@ -120,6 +122,8 @@ Before upgrading an existing container, stop it and copy its six root JSON files
 
 - `/viewbookings` - View your current bookings.
 - `/myendorsements` - View your VATNZ solo/S1 endorsements and expiry status.
+- `/editbookings` - Choose one of your bookings and edit its position, NZ date, times and extra sectors.
+- `/editbookings controller:@user` - Staff only; edit another controller's booking.
 - `/deletebookings` - Delete one of your bookings.
 - `/deletebookings controller:@user` - Staff only; delete another controller's booking.
 - `/mentor mentor:@user` - Tag a mentor for a booking.
@@ -134,6 +138,16 @@ Booking reminders are sent by DM `BOOKING_REMINDER_MINUTES` minutes before start
 StatSim starts enabled unless `STATSIM_ENABLED=false` is set. Runtime changes from `/statsim` are stored in `db/settings.json` and override the env default until changed again.
 Failed requests or unreadable StatSim traffic automatically disable lookups. The bot probes the traffic endpoint on startup and every `STATSIM_HEALTH_CHECK_MINUTES` (default 5), automatically re-enabling lookups after recovery. Valid zero counts are accepted as a healthy response. A staff `/statsim mode:disable` stays disabled until staff enable it again. During an outage, users see: "No StatSim data available at the moment due to server/bot errors."
 
+### Editing a booking
+
+Run `/editbookings` and select a booking, just like the delete picker. The form starts with its current position, date and times. Enter dates as `DD/MM` and times as four-digit `HHMM`, in New Zealand time. Sessions must end after they start on the same NZ day and last at least 30 minutes.
+
+For extendable CTR positions, the extra sectors field accepts comma-separated codes (`OCR, BAY, OHA, KAI, NAK, STH`) or full sector callsigns. Leave it blank to remove optional extensions. The booked position's inherited sectors are added automatically. When changing to an airport, FSS or RAN position, clear the extra sectors field.
+
+Edits check the controller's rating, current solo endorsement, Oceanic endorsement and event-only position availability. They reject overlaps with the controller's other bookings and with any other controller's main, inherited or optional sectors. Back-to-back sessions are allowed. An edit never removes sectors from someone else's booking. Stale or expired forms must be reopened; they cannot overwrite a changed booking.
+
+After saving, the bot replaces the booking post in the matching event thread or general booking channel, refreshes old and new event coverage, reschedules the reminder and returns StatSim traffic for the updated date, times and sectors. Existing mentor tags and approvals are reset on every edit. If a mentor is required, the controller must use `/mentor` again within 5 minutes and obtain fresh approval. The VATSIM booking API remains inactive.
+
 ## Event Threads
 
 The booking panel is reused across restarts. Its message ID is saved in `db/settings.json`; existing panels are adopted automatically, and a new panel is posted only when none exists. The bot needs View Channel and Read Message History permissions to check for an existing panel.
@@ -147,7 +161,7 @@ The bot checks the VATNZ calendar feed on startup and every 5 minutes.
 - Event embeds use Discord timestamps for start/end times, so controllers outside NZ see their local time.
 - 1 hour before an event starts, the bot posts a coverage embed in the booking/events channel and pings `EVENT_NOTIFICATIONS_ROLE_ID` if configured.
 - The coverage embed lists booked airport positions, enroute/control positions, extensions, and the event start timestamp.
-- If bookings are created, deleted, auto-deleted, or extended after the coverage embed posts, the bot edits that existing embed.
+- If bookings are created, edited, deleted, auto-deleted, or extended after the coverage embed posts, the bot edits that existing embed.
 - The coverage embed is deleted when the event finishes.
 - Event thread names use the format `Christchurch Control - 13th May`.
 - Existing overlapping bookings are reposted into the thread, original messages are deleted, and `db/messages.json` is updated.
@@ -189,8 +203,11 @@ Solo endorsement expiry warnings are sent to Discord users the bot can map to a 
 3. Add a local `.env`.
 4. Start with `npm start`.
 5. In Discord, test:
-   - Normal user creates, views, and deletes their own booking.
-   - Normal user cannot delete another controller's booking.
+   - Normal user creates, views, edits and deletes their own booking.
+   - Normal user cannot edit or delete another controller's booking.
+   - `/editbookings` pre-fills the selected booking; changing date, times, position and extensions refreshes the post and StatSim reply.
+   - Conflicting edits leave the original booking unchanged; inherited and extra sectors cannot overlap another controller's coverage.
+   - Edited bookings move into or out of event threads, refresh coverage and reset reminders and mentor approval.
    - Staff user deletes another controller's booking and the log channel receives an audit embed.
    - Mentor-required booking auto-deletes if no mentor is tagged or approval times out.
    - `/expectedtraffic NZCH_APP DD/MM HHMM HHMM` returns previous-week traffic.
