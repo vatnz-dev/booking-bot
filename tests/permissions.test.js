@@ -31,3 +31,32 @@ test('plural staff configuration takes precedence and legacy single role remains
   assert.deepEqual(readRoles('', 'legacy'), ['legacy']);
   assert.deepEqual(readRoles('', ''), []);
 });
+
+test('configured rating roles drive tier checks and booking labels without hard-coded fallbacks', () => {
+  const ratings = ['S1', 'S2', 'S3', 'I3', 'C1', 'C3', 'I1'];
+  function readConfiguration(configured) {
+    return JSON.parse(execFileSync(process.execPath, ['-e', `
+      const { ratingRoleIds, roleMap, FSS_ROLE_ID } = require('./src/constants');
+      const { getControllerTier } = require('./src/services/positions');
+      const tier = ids => getControllerTier({ roles: { cache: new Set(ids) } });
+      process.stdout.write(JSON.stringify({ ratingRoleIds, roleMap, FSS_ROLE_ID,
+        tiers: Object.values(ratingRoleIds).map(id => tier([id])),
+        highestTier: tier(Object.values(ratingRoleIds)), unknownTier: tier(['unknown']) }));
+    `], { cwd: require('node:path').resolve(__dirname, '..'), encoding: 'utf8',
+      env: { ...process.env, FSS_ROLE_ID: configured ? ' fss-custom ' : '',
+        ...Object.fromEntries(ratings.map(rating => [`${rating}_ROLE_ID`, configured ? ` ${rating}-custom ` : ''])) } }));
+  }
+  const configured = readConfiguration(true);
+  assert.equal(configured.FSS_ROLE_ID, 'fss-custom');
+  assert.deepEqual(configured.tiers, ratings);
+  assert.equal(configured.highestTier, 'I3');
+  assert.equal(configured.unknownTier, 'UNRATED');
+  for (const rating of ratings) {
+    assert.equal(configured.ratingRoleIds[rating], `${rating}-custom`);
+    assert.ok(configured.roleMap[`${rating}-custom`].startsWith(`${rating} - `));
+  }
+  const empty = readConfiguration(false);
+  assert.equal(empty.FSS_ROLE_ID, '');
+  assert.deepEqual(empty.roleMap, {});
+  assert.deepEqual(empty.tiers, ratings.map(() => 'UNRATED'));
+});

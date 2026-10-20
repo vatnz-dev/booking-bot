@@ -39,6 +39,14 @@ CHANNEL_ID=your_booking_channel_id_here
 LOG_CHANNEL_ID=your_staff_log_channel_id_here
 STAFF_ROLE_IDS=your_senior_staff_role_id,your_ops_staff_role_id,your_board_role_id
 EVENT_NOTIFICATIONS_ROLE_ID=your_event_notifications_role_id_here
+FSS_ROLE_ID=your_fss_role_id_here
+S1_ROLE_ID=your_s1_role_id_here
+S2_ROLE_ID=your_s2_role_id_here
+S3_ROLE_ID=your_s3_role_id_here
+C1_ROLE_ID=your_c1_role_id_here
+C3_ROLE_ID=your_c3_role_id_here
+I1_ROLE_ID=your_i1_role_id_here
+I3_ROLE_ID=your_i3_role_id_here
 BOOKING_REMINDERS_ENABLED=true
 BOOKING_REMINDER_MINUTES=30
 EVENT_CALENDAR_URL=https://www.vatnz.net/events/calendar/vatnz-lite.ics
@@ -51,6 +59,8 @@ STATSIM_ZERO_FALLBACK_YEARS=3
 ```
 
 Set `STAFF_ROLE_IDS` to a comma-separated list of the Senior Staff, Ops Staff and Board Member role IDs. A member with any listed role has staff rights for deleting other controllers' bookings, managing event positions and event thread prompts, and toggling StatSim. Event thread prompts mention all configured staff roles. The legacy `STAFF_ROLE_ID` variable still works when `STAFF_ROLE_IDS` is unset or empty. If neither is configured, staff actions are denied.
+
+Set the rating role variables (`S1_ROLE_ID` through `I3_ROLE_ID`) to your server's corresponding controller roles. These control booking eligibility and rating labels on booking embeds. Set `FSS_ROLE_ID` to the role allowed to book FSS positions. Missing rating roles are ignored; a missing FSS role denies FSS bookings. Restart the bot after changing role configuration.
 
 Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env`. Never commit `.env` or paste real server IDs into this README.
 

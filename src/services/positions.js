@@ -15,13 +15,9 @@ let vatnzPositionCache = {
 };
 
 function getControllerTier(member) {
-  if (member.roles.cache.has(ratingRoleIds.I3)) return 'I3';
-  if (member.roles.cache.has(ratingRoleIds.I1)) return 'I1';
-  if (member.roles.cache.has(ratingRoleIds.C3)) return 'C3';
-  if (member.roles.cache.has(ratingRoleIds.C1)) return 'C1';
-  if (member.roles.cache.has(ratingRoleIds.S3)) return 'S3';
-  if (member.roles.cache.has(ratingRoleIds.S2)) return 'S2';
-  if (member.roles.cache.has(ratingRoleIds.S1)) return 'S1';
+  for (const rating of ['I3', 'I1', 'C3', 'C1', 'S3', 'S2', 'S1']) {
+    if (ratingRoleIds[rating] && member.roles.cache.has(ratingRoleIds[rating])) return rating;
+  }
   return 'UNRATED';
 }
 

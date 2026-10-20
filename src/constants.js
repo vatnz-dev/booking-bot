@@ -26,28 +26,31 @@ const MIN_BOOKING_DURATION_MINUTES = 30;
 const BOOKING_REMINDER_MINUTES = readPositiveNumberEnv('BOOKING_REMINDER_MINUTES', 30);
 const MENTOR_TAG_TIMEOUT_MS = 5 * 60 * 1000;
 const MENTOR_APPROVAL_TIMEOUT_MS = 30 * 60 * 1000;
-const FSS_ROLE_ID = '1424849958074454146';
+const FSS_ROLE_ID = (process.env.FSS_ROLE_ID || '').trim();
 const THUMBS_UP = '\u{1F44D}';
 
 const ratingRoleIds = {
-  S1: '1424663440638611536',
-  S2: '1424663463564808213',
-  S3: '1424663506967592970',
-  I3: '1424663527670677504',
-  C1: '1427191104373264415',
-  C3: '1427191215689961473',
-  I1: '1427191337458864158'
+  S1: (process.env.S1_ROLE_ID || '').trim(),
+  S2: (process.env.S2_ROLE_ID || '').trim(),
+  S3: (process.env.S3_ROLE_ID || '').trim(),
+  I3: (process.env.I3_ROLE_ID || '').trim(),
+  C1: (process.env.C1_ROLE_ID || '').trim(),
+  C3: (process.env.C3_ROLE_ID || '').trim(),
+  I1: (process.env.I1_ROLE_ID || '').trim()
 };
 
-const roleMap = {
-  '1424663440638611536': 'S1 - Developing Controller',
-  '1424663463564808213': 'S2 - Aerodrome Controller',
-  '1424663506967592970': 'S3 - Terminal Controller',
-  '1424663527670677504': 'I3 - Senior Instructor',
-  '1427191104373264415': 'C1 - Enroute Controller',
-  '1427191215689961473': 'C3 - Senior Controller',
-  '1427191337458864158': 'I1 - Instructor'
+const ratingLabels = {
+  S1: 'S1 - Developing Controller',
+  S2: 'S2 - Aerodrome Controller',
+  S3: 'S3 - Terminal Controller',
+  I3: 'I3 - Senior Instructor',
+  C1: 'C1 - Enroute Controller',
+  C3: 'C3 - Senior Controller',
+  I1: 'I1 - Instructor'
 };
+const roleMap = Object.fromEntries(
+  Object.entries(ratingRoleIds).filter(([, id]) => id).map(([rating, id]) => [id, ratingLabels[rating]])
+);
 
 const FALLBACK_EVENT_POSITIONS = [
   'NZZO-E_FSS', 'NZAA-R_CTR', 'NZCH-D_CTR', 'NZAA_DEP', 'NZCH_DEP',
