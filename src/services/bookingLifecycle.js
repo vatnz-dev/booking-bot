@@ -193,7 +193,7 @@ function createBookingLifecycle({
     if (!booking?.mentorRequired || booking.mentorApproved) return;
 
     if (!booking.mentorId) {
-      scheduleMentorTagTimeout(ownerId, booking.messageId, remainingFromTimestamp(booking.createdAt, MENTOR_TAG_TIMEOUT_MS));
+      scheduleMentorTagTimeout(ownerId, booking.messageId, remainingFromTimestamp(booking.mentorTagRequestedAt || booking.createdAt, MENTOR_TAG_TIMEOUT_MS));
       return;
     }
 
