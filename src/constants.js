@@ -39,6 +39,8 @@ const ratingRoleIds = {
   I1: (process.env.I1_ROLE_ID || '').trim()
 };
 
+const RATING_PRIORITY = ['I3', 'I1', 'C3', 'C1', 'S3', 'S2', 'S1'];
+
 const ratingLabels = {
   S1: 'S1 - Developing Controller',
   S2: 'S2 - Aerodrome Controller',
@@ -116,6 +118,8 @@ module.exports = {
   FSS_ROLE_ID,
   THUMBS_UP,
   ratingRoleIds,
+  ratingLabels,
+  RATING_PRIORITY,
   roleMap,
   FALLBACK_EVENT_POSITIONS,
   sectorAerodromeMap,

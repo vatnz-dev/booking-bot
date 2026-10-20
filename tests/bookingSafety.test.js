@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { DateTime, Settings } = require('luxon');
+process.env.S1_ROLE_ID = 'student';
 process.env.I1_ROLE_ID = 'instructor';
 process.env.I3_ROLE_ID = 'senior-instructor';
 process.env.STAFF_ROLE_IDS = 'staff-role,mentor-role';
@@ -231,4 +232,12 @@ test('a failed mutation releases the shared queue', async () => {
   const run = createBookingMutationQueue();
   await assert.rejects(run(async () => { throw new Error('failure'); }), /failure/);
   assert.equal(await run(async () => 42), 42);
+});
+
+
+test('new booking embed displays I1 when the controller also holds S1', async () => {
+  const f = fixture();
+  f.interaction.member = member('owner', ['student', 'instructor']);
+  await f.handlers.handlePlan(f.interaction);
+  assert.equal(f.posts[0].embeds[0].toJSON().footer.text, 'I1 - Instructor');
 });

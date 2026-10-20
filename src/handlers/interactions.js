@@ -15,7 +15,6 @@ const {
   THUMBS_UP,
   allExtendableSectors,
   autoInheritanceMap,
-  roleMap,
   sectorAerodromeMap,
   sectorCodeMap
 } = require('../constants');
@@ -35,6 +34,7 @@ const {
   toDiscordTimestamp
 } = require('../utils/time');
 const { createBookingMutationQueue } = require('../utils/bookingMutations');
+const { getControllerRatingLabel } = require('../utils/controllerRating');
 const { isEligibleMentor } = require('../utils/mentor');
 const { cleanEmbedValue } = require('../utils/format');
 const { createEditBookingHandlers } = require('./editBookings');
@@ -618,12 +618,8 @@ function createInteractionHandlers({
         });
       }
 
-      for (const [roleId, label] of Object.entries(roleMap)) {
-        if (member.roles.cache.has(roleId)) {
-          bookingEmbed.setFooter({ text: label });
-          break;
-        }
-      }
+      const ratingLabel = getControllerRatingLabel(member);
+      if (ratingLabel) bookingEmbed.setFooter({ text: ratingLabel });
 
       const channel = matchingEventThread?.thread || await getBookingChannel();
       if (!channel?.send) {

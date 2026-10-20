@@ -1,4 +1,6 @@
 const { test } = require('node:test');
+process.env.S1_ROLE_ID = 'student';
+process.env.I1_ROLE_ID = 'instructor';
 const assert = require('node:assert/strict');
 const { DateTime, NZ_ZONE, convertToUTC } = require('../src/utils/time');
 const stub = (path, exports) => { require.cache[require.resolve(path)] = { exports, loaded: true }; };
@@ -314,4 +316,12 @@ test('an edit queued during cleanup survives the cleanup write', async () => {
   assert.equal(f.data.owner.length, 1);
   assert.equal(f.data.owner[0].messageId, 'new-1');
   assert.equal(f.data.owner[0].position, 'NZAA_TWR');
+});
+
+
+test('edited booking embed displays I1 when the controller also holds S1', async () => {
+  const f = fixture();
+  f.interaction.member.roles.cache = new Set(['student', 'instructor']);
+  await f.open(); await f.submit();
+  assert.equal(f.posts[0].embeds[0].toJSON().footer.text, 'I1 - Instructor');
 });
