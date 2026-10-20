@@ -40,6 +40,7 @@ DISCORD_TOKEN=your_bot_token_here
 CHANNEL_ID=your_booking_channel_id_here
 LOG_CHANNEL_ID=your_staff_log_channel_id_here
 STAFF_ROLE_IDS=your_senior_staff_role_id,your_ops_staff_role_id,your_board_role_id
+MENTOR_ROLE_ID=your_mentor_role_id_here
 EVENT_NOTIFICATIONS_ROLE_ID=your_event_notifications_role_id_here
 FSS_ROLE_ID=your_fss_role_id_here
 S1_ROLE_ID=your_s1_role_id_here
@@ -64,7 +65,7 @@ Set `STAFF_ROLE_IDS` to a comma-separated list of the Senior Staff, Ops Staff an
 
 Set the rating role variables (`S1_ROLE_ID` through `I3_ROLE_ID`) to your server's corresponding controller roles. These control booking eligibility and rating labels on booking embeds. Set `FSS_ROLE_ID` to the role allowed to book FSS positions. Missing rating roles are ignored; a missing FSS role denies FSS bookings. Restart the bot after changing role configuration.
 
-Mentors must be another human member with an I1 or I3 role. To authorize other mentor roles, set `MENTOR_ROLE_IDS` to a comma-separated list of role IDs; this replaces the I1/I3 defaults. The bot checks the role when tagging and approving, and restores pending mentor deadlines after a restart. Existing deployments should configure their mentor roles before upgrading.
+Set `MENTOR_ROLE_ID` to the Discord mentor role ID. Mentors must be another human member with that role; I1 and I3 roles do not grant mentor permission. If `MENTOR_ROLE_ID` is missing or blank, mentor tagging and approval are denied. The bot checks the role when tagging and approving, and restores pending mentor deadlines after a restart. Restart the bot after changing this configuration.
 
 Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env`. Never commit `.env` or paste real server IDs into this README.
 

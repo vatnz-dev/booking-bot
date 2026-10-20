@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { DateTime, Settings } = require('luxon');
 process.env.I1_ROLE_ID = 'instructor';
 process.env.I3_ROLE_ID = 'senior-instructor';
-delete process.env.MENTOR_ROLE_IDS;
+process.env.MENTOR_ROLE_ID = 'mentor-role';
 const fixedNow = DateTime.fromISO('2026-10-20T19:00:00+13:00').toMillis();
 Settings.now = () => fixedNow;
 const stub = (path, exports) => { require.cache[require.resolve(path)] = { exports, loaded: true }; };
@@ -28,7 +28,7 @@ function fixture(initial = {}) {
     set: (id, value) => { data[id] = structuredClone(value); }
   };
   const responses = [], deleted = [], posts = [];
-  const mentor = member('mentor', ['instructor']);
+  const mentor = member('mentor', ['mentor-role']);
   const guild = { id: 'guild', members: { cache: new Map([['mentor', mentor]]), fetch: async id => id === 'mentor' ? mentor : member(id) } };
   const channel = { id: 'channel', guild, send: async payload => { posts.push(payload); return { id: `new-${posts.length}`, delete: async () => {} }; } };
   const runBookingMutation = createBookingMutationQueue();
@@ -63,16 +63,21 @@ test('delete picker keeps identity after a preceding booking disappears and reje
   assert.deepEqual(f.data.owner.map(b => b.messageId), ['C']);
 });
 
-test('mentor roles deny self, bots and unrated users and allow configured non-instructor mentors', () => {
-  assert.equal(isEligibleMentor(member('owner', ['instructor']), 'owner'), false);
-  assert.equal(isEligibleMentor(member('bot', ['instructor'], true), 'owner'), false);
+test('mentor role is required, trims whitespace and never falls back to I1 or I3', () => {
+  assert.equal(isEligibleMentor(member('owner', ['mentor-role']), 'owner'), false);
+  assert.equal(isEligibleMentor(member('bot', ['mentor-role'], true), 'owner'), false);
   assert.equal(isEligibleMentor(member('other'), 'owner'), false);
-  assert.equal(isEligibleMentor(member('other', ['instructor']), 'owner'), true);
-  process.env.MENTOR_ROLE_IDS = ' mentor-role, mentor-role ';
+  assert.equal(isEligibleMentor(member('other', ['mentor-role']), 'owner'), true);
+  assert.equal(isEligibleMentor(member('other', ['instructor', 'senior-instructor']), 'owner'), false);
   try {
+    process.env.MENTOR_ROLE_ID = ' mentor-role ';
     assert.equal(isEligibleMentor(member('other', ['mentor-role']), 'owner'), true);
-    assert.equal(isEligibleMentor(member('other', ['instructor']), 'owner'), false);
-  } finally { delete process.env.MENTOR_ROLE_IDS; }
+    for (const value of ['', '   ', undefined]) {
+      if (value === undefined) delete process.env.MENTOR_ROLE_ID;
+      else process.env.MENTOR_ROLE_ID = value;
+      assert.equal(isEligibleMentor(member('other', ['mentor-role', 'instructor', 'senior-instructor']), 'owner'), false);
+    }
+  } finally { process.env.MENTOR_ROLE_ID = 'mentor-role'; }
 });
 
 test('mentor selection uses stable identity and checks current membership roles', async () => {
@@ -85,7 +90,7 @@ test('mentor selection uses stable identity and checks current membership roles'
   f.mentor.roles.cache.clear();
   await f.handlers.handleMentorBookingSelect({ ...f.interaction, values: [values[1]] });
   assert.equal(f.data.owner[0].mentorId, undefined);
-  f.mentor.roles.cache.add('instructor');
+  f.mentor.roles.cache.add('mentor-role');
   await f.handlers.handleMentorBookingSelect({ ...f.interaction, values: [values[1]] });
   assert.equal(f.data.owner[0].mentorId, 'mentor');
   await f.handlers.handleMentorBookingSelect({ ...f.interaction, values: ['id:B|owner'] });
@@ -102,7 +107,7 @@ test('approval rejects legacy self-tags, role loss and other users, then accepts
   f.mentor.roles.cache.clear();
   await lifecycle.handleMentorApprovalReaction(reaction, { id: 'mentor' });
   assert.ok(!f.data.owner[0].mentorApproved);
-  f.mentor.roles.cache.add('instructor');
+  f.mentor.roles.cache.add('mentor-role');
   await lifecycle.handleMentorApprovalReaction(reaction, { id: 'other' });
   assert.ok(!f.data.owner[0].mentorApproved);
   await lifecycle.handleMentorApprovalReaction(reaction, { id: 'mentor' });
