@@ -10,7 +10,7 @@ const {
   TRAINING_TEAM_ROLE_ID
 } = require('../constants');
 const { getMentorRefusal } = require('../utils/permissions');
-const { logFailures } = require('../utils/log');
+const { log, logFailures } = require('../utils/log');
 const {
   DateTime,
   buildNzDateTime,
@@ -105,7 +105,7 @@ function createBookingLifecycle({
           content: `You dismissed the extension selection, so it was defaulted to no extra sectors.\n\n${traffic}`
         });
       } catch (err) {
-        console.warn(`\u26A0\uFE0F Could not DM user ${ownerId} with fallback extension stats:`, err?.message || err);
+        log('warn', 'dm_failed', { userId: ownerId, reason: 'extension_fallback', error: err });
       }
     }), 3 * 60 * 1000);
 
@@ -128,7 +128,7 @@ function createBookingLifecycle({
       const msg = await fetchBookingMessage(removedBooking);
       if (msg) await msg.delete();
     } catch (err) {
-      console.warn(`\u26A0\uFE0F Could not auto-delete booking message ${messageId}:`, err?.message || err);
+      log('warn', 'booking_message_delete_failed', { messageId, reason: 'auto_delete', error: err });
     }
 
     if (dmText) {
@@ -136,7 +136,7 @@ function createBookingLifecycle({
         const user = await client.users.fetch(entry.ownerId);
         await user.send({ content: dmText });
       } catch (err) {
-        console.warn(`\u26A0\uFE0F Could not DM user ${ownerId} about auto-deletion:`, err?.message || err);
+        log('warn', 'dm_failed', { userId: ownerId, reason: 'auto_delete', error: err });
       }
     }
 
@@ -245,7 +245,7 @@ function createBookingLifecycle({
         color: '#00AEFF'
       });
     } catch (err) {
-      console.warn(`Could not send booking reminder to ${ownerId}:`, err?.message || err);
+      log('warn', 'booking_reminder_failed', { userId: ownerId, messageId, error: err });
     } finally {
       clearBookingReminderTimer(messageId);
     }
@@ -273,7 +273,7 @@ function createBookingLifecycle({
       }
 
       sendBookingReminder(ownerId, booking.messageId).catch(err => {
-        console.warn('Booking reminder failed:', err?.message || err);
+        log('warn', 'booking_reminder_failed', { messageId: booking.messageId, error: err });
       });
     }, cappedDelayMs);
 
@@ -362,7 +362,7 @@ function createBookingLifecycle({
         color: '#3BA55D'
       });
     } catch (err) {
-      console.warn('\u26A0\uFE0F Failed to process mentor approval reaction:', err?.message || err);
+      log('warn', 'mentor_approval_reaction_failed', { error: err });
     }
   }
 
@@ -408,7 +408,7 @@ function createBookingLifecycle({
           const msg = await fetchBookingMessage(booking);
           if (msg) await msg.delete();
         } catch (err) {
-          console.warn(`Could not delete expired booking message ${booking.messageId}:`, err?.message || err);
+          log('warn', 'booking_message_delete_failed', { messageId: booking.messageId, reason: 'expired', error: err });
         }
 
         await sendAuditLog({
@@ -432,9 +432,9 @@ function createBookingLifecycle({
   function startBookingCleanupScheduler() {
     if (bookingCleanupInterval) return;
     rescheduleAllBookingReminders();
-    cleanupExpiredBookings().catch(err => console.warn('Booking cleanup failed:', err?.message || err));
+    cleanupExpiredBookings().catch(err => log('warn', 'booking_cleanup_failed', { error: err }));
     bookingCleanupInterval = setInterval(() => {
-      cleanupExpiredBookings().catch(err => console.warn('Booking cleanup failed:', err?.message || err));
+      cleanupExpiredBookings().catch(err => log('warn', 'booking_cleanup_failed', { error: err }));
     }, ONE_HOUR_MS);
   }
 

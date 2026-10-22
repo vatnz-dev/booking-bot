@@ -170,7 +170,7 @@ function createInteractionHandlers({
     try {
       endorsements = await fetchSoloEndorsements();
     } catch (err) {
-      console.warn('Could not fetch VATNZ solo endorsements for /myendorsements:', err?.message || err);
+      log('warn', 'endorsements_fetch_failed', { command: 'myendorsements', error: err });
       await interaction.editReply({ content: 'Could not fetch VATNZ solo endorsements right now. Please try again later.' });
       return;
     }
@@ -307,7 +307,7 @@ function createInteractionHandlers({
         : await formatAerodromeTraffic(position, previousWeekDate, start.raw, end.raw);
       await interaction.editReply({ content: traffic });
     } catch (err) {
-      console.error('Expected traffic lookup failed:', err);
+      log('error', 'expected_traffic_failed', { error: err });
       await interaction.editReply({ content: 'Could not fetch expected traffic right now. Please try again later.' });
     }
   }
@@ -423,7 +423,7 @@ function createInteractionHandlers({
       const messageToDelete = await fetchBookingMessage(booking);
       if (messageToDelete) await messageToDelete.delete();
     } catch (err) {
-      console.error(`\u26A0\uFE0F Could not delete message ${booking.messageId}:`, err);
+      log('error', 'booking_message_delete_failed', { messageId: booking.messageId, error: err });
     }
 
     await sendAuditLog({
@@ -645,7 +645,7 @@ function createInteractionHandlers({
 
               await msg.edit({ embeds: [newEmbed] });
             } catch (err) {
-              console.warn(`\u26A0\uFE0F Could not update embed for booking ${b.messageId}`);
+              log('warn', 'booking_embed_update_failed', { messageId: b.messageId, error: err });
             }
 
             try {
@@ -669,7 +669,7 @@ function createInteractionHandlers({
                 ]
               });
             } catch (err) {
-              console.warn(`\u26A0\uFE0F Could not DM user ${otherUserId}: ${err}`);
+              log('warn', 'dm_failed', { userId: otherUserId, reason: 'sectors_removed', error: err });
             }
 
             messages.set(otherUserId, bookings);
@@ -1138,7 +1138,7 @@ function createInteractionHandlers({
         ephemeral: true
       });
     } catch (err) {
-      console.error('\u274C Error in extend_sector_select handler:', err);
+      log('error', 'extend_sector_select_failed', { error: err });
       try {
         if (interaction.deferred || interaction.replied) {
           await interaction.editReply({ content: '\u274C Something went wrong.', components: [] });
@@ -1146,7 +1146,7 @@ function createInteractionHandlers({
           await interaction.reply({ content: '\u274C Something went wrong.', components: [], ephemeral: true });
         }
       } catch (e) {
-        console.warn('\u26A0\uFE0F Failed to send error reply:', e);
+        log('warn', 'error_reply_failed', { error: e });
       }
     }
   }
@@ -1174,7 +1174,7 @@ function createInteractionHandlers({
         const s4dmessage = await bookingChannel.messages.fetch(closeMessageId);
         await s4dmessage.delete();
       } catch (err) {
-        console.warn(`Could not delete event close message ${closeMessageId}:`, err?.message || err);
+        log('warn', 'event_close_message_delete_failed', { messageId: closeMessageId, error: err });
       }
     }
     await interaction.editReply({ content: `${position} closed!`, components: [] });
@@ -1238,7 +1238,7 @@ function createInteractionHandlers({
         await s4dmessage.edit({ embeds: [newEmbed] });
       }
     } catch (err) {
-      console.error('\u274C Failed to fetch/update booking message:', err);
+      log('error', 'mentor_booking_message_update_failed', { messageId: booking.messageId, error: err });
     }
 
     booking.mentorId = mentorId;
@@ -1274,7 +1274,7 @@ function createInteractionHandlers({
         }]
       });
     } catch (err) {
-      console.error('\u274C Failed to DM mentor:', err);
+      log('error', 'dm_failed', { userId: mentorId, reason: 'mentor_request', error: err });
     }
 
     await interaction.editReply({
@@ -1422,7 +1422,7 @@ function createInteractionHandlers({
             await interaction.reply(payload);
           }
         } catch (replyErr) {
-          console.warn('Could not send interaction error response:', replyErr?.message || replyErr);
+          log('warn', 'interaction_error_reply_failed', { interactionId: interaction.id, error: replyErr });
         }
       } finally {
         log('info', 'interaction', {

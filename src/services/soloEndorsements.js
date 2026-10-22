@@ -9,7 +9,7 @@ const {
   SOLO_ENDORSEMENTS_URL
 } = require('../constants');
 const { DateTime, buildNzDateTime } = require('../utils/time');
-const { summarizeError } = require('../utils/format');
+const { log } = require('../utils/log');
 const { getControllerTier } = require('./positions');
 
 const NZ_ZONE = 'Pacific/Auckland';
@@ -152,7 +152,7 @@ async function fetchSoloEndorsements({ force = false } = {}) {
     };
   } catch (err) {
     if (endorsementCache.endorsements.length > 0) {
-      console.warn(`Using cached VATNZ solo endorsements after fetch failed: ${summarizeError(err)}`);
+      log('warn', 'endorsements_using_cache', { error: err });
       return endorsementCache.endorsements;
     }
     throw err;
@@ -249,7 +249,7 @@ async function applySoloEndorsementOverride({ baseEligibility, cid, member, posi
   try {
     endorsement = await findMatchingSoloEndorsement({ cid, member, position, bookingDateNz });
   } catch (err) {
-    console.warn(`Could not verify VATNZ solo endorsements: ${summarizeError(err)}`);
+    log('warn', 'endorsements_verify_failed', { error: err });
   }
 
   if (!endorsement) return { ...baseEligibility, soloEndorsement: null };
@@ -286,7 +286,7 @@ function createEndorsementWarningService({ client, messages, endorsementWarnings
     try {
       endorsements = await fetchSoloEndorsements();
     } catch (err) {
-      console.warn(`Could not fetch VATNZ solo endorsements for warnings: ${summarizeError(err)}`);
+      log('warn', 'endorsements_fetch_failed', { purpose: 'expiry_warnings', error: err });
       return;
     }
 
@@ -315,7 +315,7 @@ function createEndorsementWarningService({ client, messages, endorsementWarnings
             endorsement: formatEndorsementScope(endorsement)
           });
         } catch (err) {
-          console.warn(`Could not send solo endorsement expiry warning to ${ownerId}:`, err?.message || err);
+          log('warn', 'dm_failed', { userId: ownerId, reason: 'endorsement_expiry_warning', error: err });
         }
       }
     }
@@ -323,9 +323,9 @@ function createEndorsementWarningService({ client, messages, endorsementWarnings
 
   function startEndorsementWarningScheduler() {
     if (warningInterval) return;
-    sendDueEndorsementWarnings().catch(err => console.warn('Solo endorsement warning check failed:', err?.message || err));
+    sendDueEndorsementWarnings().catch(err => log('warn', 'endorsement_warning_check_failed', { error: err }));
     warningInterval = setInterval(() => {
-      sendDueEndorsementWarnings().catch(err => console.warn('Solo endorsement warning check failed:', err?.message || err));
+      sendDueEndorsementWarnings().catch(err => log('warn', 'endorsement_warning_check_failed', { error: err }));
     }, ENDORSEMENT_WARNING_CHECK_MS);
   }
 

@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { log } = require('../utils/log');
 
 async function getVatsimId(discordId) {
   try {
@@ -6,13 +7,13 @@ async function getVatsimId(discordId) {
     const response = await axios.get(url);
 
     if (!response.data || !response.data.user_id) {
-      console.error('\u274C VATSIM ID not found in response.');
+      log('warn', 'vatsim_id_not_found', { discordId });
       return null;
     }
 
     return response.data.user_id;
   } catch (error) {
-    console.error('\u274C Failed to fetch VATSIM ID:', error.response?.status || error.message);
+    log('error', 'vatsim_id_lookup_failed', { discordId, error });
     return null;
   }
 }
@@ -34,7 +35,7 @@ async function sendBooking({ callsign, cid, start, end }) {
     const response = await axios.post('https://atc-bookings.vatsim.net/api/booking', payload);
     return response.data.id;
   } catch (error) {
-    console.error('VATSIM booking failed:', error.response?.status || error.message);
+    log('error', 'vatsim_booking_failed', { callsign, error });
     return null;
   }
 }
@@ -43,7 +44,7 @@ async function deleteVatsimBooking(bookingId) {
   try {
     await axios.delete(`https://atc-bookings.vatsim.net/api/booking/${bookingId}`);
   } catch (error) {
-    console.error(`Failed to delete VATSIM booking ${bookingId}:`, error.response?.status || error.message);
+    log('error', 'vatsim_booking_delete_failed', { bookingId, error });
   }
 }
 */

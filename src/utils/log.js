@@ -1,7 +1,9 @@
 // One JSON line per event on stdout, so container logs can be searched and traced.
 function log(level, event, fields = {}) {
   const line = JSON.stringify({ time: new Date().toISOString(), level, event, ...fields }, (key, value) =>
-    value instanceof Error ? { message: value.message, code: value.code, stack: value.stack } : value);
+    value instanceof Error
+      ? { message: value.message, code: value.code ?? value.cause?.code, status: value.response?.status, stack: value.stack }
+      : value);
   (level === 'error' ? console.error : console.log)(line);
 }
 

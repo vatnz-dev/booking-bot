@@ -71,6 +71,17 @@ test('a failing scheduled task is logged with its context and does not reject', 
   assert.match(errors[0].error.stack, /Discord 503/);
 });
 
+test('HTTP errors log their status without the request config, headers or URL', async t => {
+  const errors = captureLogs(t, 'error');
+  const error = Object.assign(new Error('Request failed with status code 503'), {
+    code: 'ERR_BAD_RESPONSE', response: { status: 503 }, config: { url: 'https://example.org/feed?token=secret', headers: { 'X-API-Key': 'secret' } }
+  });
+  await logFailures('event_check', {}, async () => { throw error; })();
+  assert.equal(errors[0].error.status, 503);
+  assert.equal(errors[0].error.code, 'ERR_BAD_RESPONSE');
+  assert.doesNotMatch(JSON.stringify(errors[0]), /secret/);
+});
+
 test('every interaction produces one traceable log line', async t => {
   const lines = captureLogs(t, 'log');
   let onInteraction;
