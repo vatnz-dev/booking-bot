@@ -27,6 +27,7 @@ const BOOKING_REMINDER_MINUTES = readPositiveNumberEnv('BOOKING_REMINDER_MINUTES
 const MENTOR_TAG_TIMEOUT_MS = 5 * 60 * 1000;
 const MENTOR_APPROVAL_TIMEOUT_MS = 30 * 60 * 1000;
 const FSS_ROLE_ID = (process.env.FSS_ROLE_ID || '').trim();
+const TRAINING_TEAM_ROLE_ID = (process.env.TRAINING_TEAM_ROLE_ID || '').trim();
 const THUMBS_UP = '\u{1F44D}';
 
 const ratingRoleIds = {
@@ -114,6 +115,7 @@ module.exports = {
   MENTOR_TAG_TIMEOUT_MS,
   MENTOR_APPROVAL_TIMEOUT_MS,
   FSS_ROLE_ID,
+  TRAINING_TEAM_ROLE_ID,
   THUMBS_UP,
   ratingRoleIds,
   roleMap,

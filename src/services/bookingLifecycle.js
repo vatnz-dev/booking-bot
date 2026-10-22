@@ -6,8 +6,10 @@ const {
   MENTOR_TAG_TIMEOUT_MS,
   MENTOR_APPROVAL_TIMEOUT_MS,
   ONE_HOUR_MS,
-  THUMBS_UP
+  THUMBS_UP,
+  TRAINING_TEAM_ROLE_ID
 } = require('../constants');
+const { getMentorRefusal } = require('../utils/permissions');
 const {
   DateTime,
   buildNzDateTime,
@@ -306,6 +308,21 @@ function createBookingLifecycle({
       const booking = entry.booking;
       if (!booking.mentorRequired || !booking.mentorId || booking.mentorApproved) return;
       if (user.id !== booking.mentorId) return;
+
+      // Re-check at approval time: the mentor may have lost the training role since being tagged.
+      const mentorMember = await reaction.message.guild?.members.fetch(user.id).catch(() => null);
+      const refusal = getMentorRefusal(mentorMember, entry.ownerId, TRAINING_TEAM_ROLE_ID);
+      if (refusal) {
+        await sendAuditLog({
+          action: 'Mentor Approval Refused',
+          actorId: user.id,
+          targetUserId: entry.ownerId,
+          booking,
+          reason: refusal,
+          color: '#D9534F'
+        });
+        return;
+      }
 
       booking.mentorApproved = true;
       booking.mentorApprovedAt = new Date().toISOString();

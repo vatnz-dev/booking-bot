@@ -11,6 +11,7 @@ const {
 
 const {
   FSS_ROLE_ID,
+  TRAINING_TEAM_ROLE_ID,
   MIN_BOOKING_DURATION_MINUTES,
   THUMBS_UP,
   allExtendableSectors,
@@ -37,6 +38,7 @@ const {
 const { cleanEmbedValue } = require('../utils/format');
 const { createEditBookingHandlers } = require('./editBookings');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
+const { getMentorRefusal } = require('../utils/permissions');
 const {
   resolveAerodromes,
   formatAerodromeTraffic,
@@ -1285,6 +1287,18 @@ function createInteractionHandlers({
   async function handleMentor(interaction) {
     const userId = String(interaction.member.user.id);
     const mentor = interaction.options.getMember('mentor');
+    const refusal = getMentorRefusal(mentor, userId, TRAINING_TEAM_ROLE_ID);
+    if (refusal) {
+      await interaction.reply({ content: `❌ ${refusal}`, ephemeral: true });
+      await sendAuditLog({
+        action: 'Mentor Request Refused',
+        actorId: userId,
+        reason: refusal,
+        fields: [{ name: 'Tagged', value: mentor?.id ? `<@${mentor.id}> (${mentor.id})` : 'Unknown member', inline: true }],
+        color: '#D9534F'
+      });
+      return;
+    }
     const userBookings = messages.get(userId);
 
     if (!Array.isArray(userBookings) || userBookings.length === 0) {
