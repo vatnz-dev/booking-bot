@@ -134,6 +134,12 @@ module.exports = [
     ]
   },
   {
+    // Message context menu (right-click a booking post > Apps); hidden until allowed in Server Settings > Integrations.
+    name: 'Approve booking',
+    type: 3,
+    default_member_permissions: '0'
+  },
+  {
     name: 'maintenance',
     description: 'Bot owners: manage who can use staff features.',
     default_member_permissions: '0',

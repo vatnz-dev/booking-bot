@@ -296,6 +296,44 @@ function createBookingLifecycle({
     }
   }
 
+  // Shared by the mentor's 👍 and the training staff Approve booking command.
+  async function approveMentorBooking(entry, { approverId, mentorValue, auditAction, reason, dmText = null }) {
+    const { booking } = entry;
+    booking.mentorApproved = true;
+    booking.mentorApprovedAt = new Date().toISOString();
+    booking.mentorApprovedBy = approverId;
+    messages.set(entry.ownerId, entry.bookings);
+    clearMentorTimers(booking.messageId);
+
+    const msg = await fetchBookingMessage(booking);
+    const embed = msg?.embeds?.[0];
+    if (embed) {
+      const newEmbed = new EmbedBuilder()
+        .setColor(embed.color)
+        .setTitle(embed.title)
+        .setTimestamp()
+        .setThumbnail(embed.thumbnail?.url)
+        .setFooter(embed.footer?.text ? { text: embed.footer.text } : null);
+      for (const field of embed.fields) {
+        if (field.name !== 'Mentor') newEmbed.addFields({ name: field.name, value: field.value, inline: field.inline });
+      }
+      newEmbed.addFields({ name: 'Mentor', value: mentorValue, inline: false });
+      await msg.edit({ embeds: [newEmbed] });
+      await msg.reactions.removeAll().catch(() => {});
+    }
+
+    if (dmText) {
+      try {
+        const owner = await client.users.fetch(entry.ownerId);
+        await owner.send({ content: dmText });
+      } catch (err) {
+        log('warn', 'dm_failed', { userId: entry.ownerId, reason: 'booking_approved', error: err });
+      }
+    }
+
+    await sendAuditLog({ action: auditAction, actorId: approverId, targetUserId: entry.ownerId, booking, reason, color: '#3BA55D' });
+  }
+
   async function handleMentorApprovalReaction(reaction, user) {
     try {
       if (user.bot) return;
@@ -325,41 +363,11 @@ function createBookingLifecycle({
         return;
       }
 
-      booking.mentorApproved = true;
-      booking.mentorApprovedAt = new Date().toISOString();
-      messages.set(entry.ownerId, entry.bookings);
-
-      const approvalTimer = mentorApprovalTimeouts.get(messageId);
-      if (approvalTimer) {
-        clearTimeout(approvalTimer);
-        mentorApprovalTimeouts.delete(messageId);
-      }
-
-      const msg = await fetchBookingMessage(booking);
-      if (!msg) return;
-      const embed = msg.embeds[0];
-      const newEmbed = new EmbedBuilder()
-        .setColor(embed.color)
-        .setTitle(embed.title)
-        .setTimestamp()
-        .setThumbnail(embed.thumbnail?.url)
-        .setFooter(embed.footer?.text ? { text: embed.footer.text } : null);
-
-      for (const field of embed.fields) {
-        if (field.name !== 'Mentor') {
-          newEmbed.addFields({ name: field.name, value: field.value, inline: field.inline });
-        }
-      }
-      newEmbed.addFields({ name: 'Mentor', value: `<@${booking.mentorId}> \u2705 Approved`, inline: false });
-      await msg.edit({ embeds: [newEmbed] });
-      await msg.reactions.removeAll().catch(() => {});
-      await sendAuditLog({
-        action: 'Mentor Approved Booking',
-        actorId: user.id,
-        targetUserId: entry.ownerId,
-        booking,
-        reason: 'Mentor reacted with approval',
-        color: '#3BA55D'
+      await approveMentorBooking(entry, {
+        approverId: user.id,
+        mentorValue: `<@${booking.mentorId}> \u2705 Approved`,
+        auditAction: 'Mentor Approved Booking',
+        reason: 'Mentor reacted with approval'
       });
     } catch (err) {
       log('warn', 'mentor_approval_reaction_failed', { error: err });
@@ -453,6 +461,7 @@ function createBookingLifecycle({
     rescheduleBookingReminder,
     rescheduleAllBookingReminders,
     handleMentorApprovalReaction,
+    approveMentorBooking,
     getBookingEndForCleanup,
     cleanupExpiredBookings,
     startBookingCleanupScheduler

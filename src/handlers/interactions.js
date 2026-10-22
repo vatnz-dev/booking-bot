@@ -1339,6 +1339,54 @@ function createInteractionHandlers({
     });
   }
 
+  // Training staff approval: checks run on the command and again on the form submit, since the booking may change in between.
+  async function checkTrainingApproval(interaction, messageId) {
+    const permission = access.can('mentor-approver', interaction.member);
+    if (permission !== 'ok') return refuse(interaction, REFUSALS[permission]);
+    const entry = bookingLifecycle.findBookingByMessageId(messageId);
+    if (!entry?.booking.mentorRequired || entry.booking.mentorApproved) {
+      return refuse(interaction, "This post isn't a booking awaiting mentor approval.");
+    }
+    if (entry.ownerId === interaction.user.id) return refuse(interaction, "You can't approve your own booking.");
+    return entry;
+  }
+
+  async function handleApproveBookingCommand(interaction) {
+    const messageId = interaction.targetMessage.id;
+    if (!await checkTrainingApproval(interaction, messageId)) return;
+    const modal = new ModalBuilder()
+      .setCustomId(`approve_booking:${messageId}`)
+      .setTitle('Approve booking')
+      .addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('reason')
+          .setLabel("Reason for approving on the mentor's behalf")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+          .setMaxLength(500)
+      ));
+    await interaction.showModal(modal);
+  }
+
+  async function handleApproveBookingSubmit(interaction) {
+    const messageId = interaction.customId.slice('approve_booking:'.length);
+    const reason = interaction.fields.getTextInputValue('reason').trim();
+    await runBookingMutation(async () => {
+      const entry = await checkTrainingApproval(interaction, messageId);
+      if (!entry) return;
+      if (!reason) return refuse(interaction, 'A reason is required.');
+      const window = getBookingWindowDisplay(entry.booking);
+      await bookingLifecycle.approveMentorBooking(entry, {
+        approverId: interaction.user.id,
+        mentorValue: `Approved by <@${interaction.user.id}> (training staff)`,
+        auditAction: 'Booking Approved by Training Staff',
+        reason,
+        dmText: `✅ Your **${entry.booking.position}** booking ${window} was approved by training staff.`
+      });
+      await interaction.reply({ content: `✅ Approved **${entry.booking.position}** ${window}.`, ephemeral: true });
+    });
+  }
+
   async function handleMaintenance(interaction) {
     if (!access.isOwner(interaction.user.id)) {
       await refuse(interaction, REFUSALS.owner);
@@ -1428,6 +1476,11 @@ function createInteractionHandlers({
           return;
         }
 
+        if (interaction.isMessageContextMenuCommand?.()) {
+          if (interaction.commandName === 'Approve booking') await handleApproveBookingCommand(interaction);
+          return;
+        }
+
         if (interaction.isButton()) {
           if (interaction.customId.startsWith('event_thread_')) {
             await handleEventThreadButton(interaction);
@@ -1463,6 +1516,10 @@ function createInteractionHandlers({
         if (interaction.isModalSubmit()) {
           if (interaction.customId.startsWith('edit_booking:')) {
             await editHandlers.handleEditBookingSubmit(interaction);
+            return;
+          }
+          if (interaction.customId.startsWith('approve_booking:')) {
+            await handleApproveBookingSubmit(interaction);
             return;
           }
           switch (interaction.customId) {
@@ -1513,7 +1570,9 @@ function createInteractionHandlers({
     handleCloseEventPosition,
     handleMentorBookingSelect,
     handleMentor,
-    handleMaintenance
+    handleMaintenance,
+    handleApproveBookingCommand,
+    handleApproveBookingSubmit
   };
 }
 

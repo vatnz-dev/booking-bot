@@ -81,6 +81,8 @@ Each staff permission has its own list, so a team only gets what its job needs:
 
 Roles listed in a permission grant it directly. Users listed in a permission only keep it while they hold `BOARD_ROLE_ID` or `SENIOR_STAFF_ROLE_ID`, so access lapses when someone steps down. Bot owners (`BOT_OWNER_IDS`) can run `/statsim` and `/maintenance access add|remove|list`. The first `/maintenance` change to a permission saves its list in `db/settings.json`, and from then on that saved list is used instead of the environment value. Owners can only be changed in the environment. `STAFF_ROLE_IDS` is no longer used.
 
+`/maintenance` and the **Approve booking** message command (right-click a booking post, then Apps) are hidden by default. In Server Settings > Integrations, allow `/maintenance` for the bot owners and Approve booking for the users in `MENTOR_APPROVER_USER_IDS`. The bot still checks permissions itself, so showing a command to someone doesn't give them access. Approve booking asks for a reason, stops the mentor deletion timers, marks the post "Approved by … (training staff)", tells the controller by DM, and records the reason in the audit trail.
+
 Set the rating role variables (`S1_ROLE_ID` through `I3_ROLE_ID`) to your server's corresponding controller roles. These control booking eligibility and rating labels on booking embeds. Set `FSS_ROLE_ID` to the role allowed to book FSS positions. Missing rating roles are ignored; a missing FSS role denies FSS bookings. Restart the bot after changing role configuration.
 
 Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env`. Never commit `.env` or paste real server IDs into this README.
