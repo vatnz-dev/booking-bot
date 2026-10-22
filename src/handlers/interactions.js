@@ -41,6 +41,7 @@ const { createEditBookingHandlers } = require('./editBookings');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
 const { getMentorRefusal } = require('../utils/permissions');
 const { log } = require('../utils/log');
+const { REFUSALS, describeGrants } = require('../services/access');
 const {
   resolveAerodromes,
   formatAerodromeTraffic,
@@ -124,13 +125,28 @@ function createInteractionHandlers({
   event,
   eventclose,
   messages,
-  isStaffMember,
+  access,
   getBookingChannel,
   fetchBookingMessage,
   sendAuditLog,
   eventThreadService,
   bookingLifecycle
 }) {
+  const isBookingModerator = member => access.can('booking-moderator', member) === 'ok';
+
+  // Replies privately with the refusal and records it in the audit trail.
+  async function refuse(interaction, message, { deferred = false } = {}) {
+    const payload = { content: message, components: [], ephemeral: true };
+    await (deferred ? interaction.editReply(payload) : interaction.reply(payload));
+    await sendAuditLog({
+      action: 'Action Refused',
+      actorId: interaction.user?.id ?? interaction.member?.user?.id,
+      reason: message,
+      fields: [{ name: 'Action', value: interaction.commandName ?? interaction.customId ?? 'unknown', inline: true }],
+      color: '#D9534F'
+    });
+  }
+
   const buttonCooldowns = new Map();
   // Serialize booking changes across controllers, including async Discord sends,
   // so a second submission sees the first submission's committed sectors.
@@ -140,7 +156,7 @@ function createInteractionHandlers({
     bookingMutation = next.catch(() => {});
     return next;
   }
-  const editHandlers = createEditBookingHandlers({ client, messages, event, isStaffMember, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation });
+  const editHandlers = createEditBookingHandlers({ client, messages, event, isBookingModerator, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation });
   const {
     clearMentorTimers,
     clearExtensionSelectionTimer,
@@ -228,13 +244,8 @@ function createInteractionHandlers({
   async function handleDeleteBookings(interaction) {
     const userId = String(interaction.member.user.id);
     const requestedController = interaction.options.getUser('controller');
-    const staff = isStaffMember(interaction.member);
-
-    if (requestedController && requestedController.id !== userId && !staff) {
-      await interaction.reply({
-        content: 'You can only delete your own bookings.',
-        ephemeral: true
-      });
+    if (requestedController && requestedController.id !== userId && !isBookingModerator(interaction.member)) {
+      await refuse(interaction, 'You can only delete your own bookings.');
       return;
     }
 
@@ -316,8 +327,8 @@ function createInteractionHandlers({
   async function handleStatsim(interaction) {
     await interaction.deferReply({ ephemeral: true });
 
-    if (!isStaffMember(interaction.member)) {
-      await interaction.editReply({ content: 'Only staff can change StatSim lookup status.' });
+    if (!access.isOwner(interaction.user.id)) {
+      await refuse(interaction, REFUSALS.owner, { deferred: true });
       return;
     }
 
@@ -385,13 +396,8 @@ function createInteractionHandlers({
       : [userId, interaction.values[0]];
     const selectedIndex = parseInt(selectedIndexFromValue, 10);
     const targetUserId = String(targetUserFromValue);
-    const staff = isStaffMember(interaction.member);
-
-    if (targetUserId !== userId && !staff) {
-      await interaction.editReply({
-        content: 'You can only delete your own bookings.',
-        components: []
-      });
+    if (targetUserId !== userId && !isBookingModerator(interaction.member)) {
+      await refuse(interaction, 'You can only delete your own bookings.', { deferred: true });
       return;
     }
 
@@ -965,8 +971,9 @@ function createInteractionHandlers({
   }
 
   async function handleOpenEventPosition(interaction) {
-    if (!isStaffMember(interaction.member)) {
-      await interaction.reply({ content: 'Only staff can open event positions.', ephemeral: true });
+    const permission = access.can('event-position', interaction.member);
+    if (permission !== 'ok') {
+      await refuse(interaction, REFUSALS[permission]);
       return;
     }
 
@@ -1153,8 +1160,9 @@ function createInteractionHandlers({
   }
 
   async function handleCloseEventPosition(interaction) {
-    if (!isStaffMember(interaction.member)) {
-      await interaction.reply({ content: 'Only staff can close event positions.', ephemeral: true });
+    const permission = access.can('event-position', interaction.member);
+    if (permission !== 'ok') {
+      await refuse(interaction, REFUSALS[permission]);
       return;
     }
 
@@ -1331,6 +1339,48 @@ function createInteractionHandlers({
     });
   }
 
+  async function handleMaintenance(interaction) {
+    if (!access.isOwner(interaction.user.id)) {
+      await refuse(interaction, REFUSALS.owner);
+      return;
+    }
+
+    const subcommand = interaction.options.getSubcommand();
+    if (subcommand === 'list') {
+      const lines = access.list().map(({ permission, source, ...grants }) => `**${permission}** (${source}): ${describeGrants(grants)}`);
+      await interaction.reply({ content: lines.join('\n'), allowedMentions: { parse: [] }, ephemeral: true });
+      return;
+    }
+
+    const permission = interaction.options.getString('permission');
+    const { role, user } = interaction.options.get('target') || {};
+    if (role?.id === interaction.guildId) {
+      await refuse(interaction, "@everyone can't be given bot permissions.");
+      return;
+    }
+    if (role?.managed) {
+      await refuse(interaction, "Roles managed by Discord or bots can't be used.");
+      return;
+    }
+
+    const kind = role ? 'roles' : 'users';
+    const id = (role || user).id;
+    const mention = role ? `<@&${id}>` : `<@${id}>`;
+    const { before, after } = access[subcommand](permission, kind, id);
+    await sendAuditLog({
+      action: 'Access Changed',
+      actorId: interaction.user.id,
+      reason: `${subcommand === 'add' ? 'Added' : 'Removed'} ${mention} ${subcommand === 'add' ? 'to' : 'from'} ${permission}`,
+      fields: [
+        { name: 'Permission', value: permission, inline: true },
+        { name: 'Before', value: describeGrants(before), inline: false },
+        { name: 'After', value: describeGrants(after), inline: false }
+      ],
+      color: '#5865F2'
+    });
+    await interaction.reply({ content: `Updated **${permission}**: ${describeGrants(after)}`, allowedMentions: { parse: [] }, ephemeral: true });
+  }
+
   function registerInteractionHandlers() {
     client.on('interactionCreate', async (interaction) => {
       const startedAt = Date.now();
@@ -1358,6 +1408,9 @@ function createInteractionHandlers({
               break;
             case 'myendorsements':
               await handleMyEndorsements(interaction);
+              break;
+            case 'maintenance':
+              await handleMaintenance(interaction);
               break;
             case 'mentor':
               await handleMentor(interaction);
@@ -1459,7 +1512,8 @@ function createInteractionHandlers({
     handleExtendSectorSelect,
     handleCloseEventPosition,
     handleMentorBookingSelect,
-    handleMentor
+    handleMentor,
+    handleMaintenance
   };
 }
 

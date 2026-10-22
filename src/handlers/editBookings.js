@@ -13,7 +13,7 @@ const { log } = require('../utils/log');
 // mentor approval, extension selection, reminder or event-thread relocation.
 const revision = booking => JSON.stringify(booking);
 
-function createEditBookingHandlers({ client, messages, event, isStaffMember, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation }) {
+function createEditBookingHandlers({ client, messages, event, isBookingModerator, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation }) {
   const sessions = new Map();
   const { findMatchingEventThreadForBooking, refreshEventCoverageNotificationsForBooking } = eventThreadService;
 
@@ -29,7 +29,7 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
   function resolve(token, interaction) {
     const session = sessions.get(token);
     if (!session || session.expires < Date.now() || session.actorId !== interaction.user.id) return null;
-    if (session.ownerId !== interaction.user.id && !isStaffMember(interaction.member)) return null;
+    if (session.ownerId !== interaction.user.id && !isBookingModerator(interaction.member)) return null;
     const bookings = messages.get(session.ownerId);
     const booking = Array.isArray(bookings) && bookings.find(b => b.messageId === session.messageId);
     if (!booking || revision(booking) !== session.revision) return null;
@@ -38,8 +38,9 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
 
   async function handleEditBookings(interaction) {
     const ownerId = interaction.options.getUser('controller')?.id || interaction.user.id;
-    if (ownerId !== interaction.user.id && !isStaffMember(interaction.member)) {
-      return interaction.reply({ content: 'You can only edit your own bookings.', ephemeral: true });
+    if (ownerId !== interaction.user.id && !isBookingModerator(interaction.member)) {
+      await interaction.reply({ content: 'You can only edit your own bookings.', ephemeral: true });
+      return sendAuditLog({ action: 'Action Refused', actorId: interaction.user.id, targetUserId: ownerId, reason: 'Tried to edit another controller\'s booking', color: '#D9534F' });
     }
     const bookings = messages.get(ownerId);
     if (!Array.isArray(bookings) || !bookings.length) {

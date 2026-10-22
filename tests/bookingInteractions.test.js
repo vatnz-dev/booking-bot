@@ -52,30 +52,39 @@ test('simultaneous submissions are blocked and the guard releases on error', asy
   assert.match(response, /already have a booking/);
 });
 
-const { hasStaffRole } = require('../src/utils/permissions');
-const staffRoles = ['senior-staff', 'ops-staff', 'board'];
+const { createAccess } = require('../src/services/access');
+const access = createAccess({
+  settings: { get: () => undefined },
+  env: { EVENT_POSITION_USER_IDS: 'events-director,events-manager', BOARD_ROLE_ID: 'board', SENIOR_STAFF_ROLE_ID: 'senior-staff' }
+});
+const member = (id, roles) => ({ id, user: { id }, roles: { cache: new Set(roles) } });
 
 for (const action of ['Open', 'Close']) {
-  test(`${action} event position denies non-staff before any side effects`, async () => {
-    const handlers = createInteractionHandlers({
-      isStaffMember: member => hasStaffRole(member, staffRoles),
-      bookingLifecycle: {}, eventThreadService: {}
-    });
-    for (const member of [null, { roles: ['controller'] }]) {
+  test(`${action} event position refuses everyone else before any side effects, and logs it`, async () => {
+    const cases = [
+      [null, /don't have permission/],
+      [member('ops', ['ops-staff', 'senior-staff']), /don't have permission/],
+      [member('events-manager', ['events-team']), /access to this action has lapsed/]
+    ];
+    for (const [who, message] of cases) {
+      const audits = [];
+      const handlers = createInteractionHandlers({ access, sendAuditLog: async entry => audits.push(entry), bookingLifecycle: {}, eventThreadService: {} });
       let response;
       await handlers[`handle${action}EventPosition`]({
-        member,
+        member: who,
+        commandName: `${action.toLowerCase()}eventposition`,
         reply: async payload => { response = payload; },
         deferReply: () => assert.fail('Unauthorized interaction must not be deferred'),
         options: { getString: () => assert.fail('Unauthorized interaction must not read options') }
       });
       assert.equal(response.ephemeral, true);
-      assert.match(response.content, /Only staff/);
+      assert.match(response.content, message);
+      assert.equal(audits[0].action, 'Action Refused');
     }
   });
 
-  test(`${action} event position permits each configured staff role`, async () => {
-    for (const role of staffRoles) {
+  test(`${action} event position permits each named user while they hold Board or Senior Staff`, async () => {
+    for (const who of [member('events-director', ['board']), member('events-manager', ['senior-staff', 'events-team'])]) {
       const saved = [];
       const audits = [];
       let posted = 0;
@@ -86,7 +95,7 @@ for (const action of ['Open', 'Close']) {
         messages: { fetch: async () => ({ delete: async () => { deleted++; } }) }
       };
       const handlers = createInteractionHandlers({
-        isStaffMember: member => hasStaffRole(member, staffRoles),
+        access,
         event: { set: (...args) => saved.push(args) },
         eventclose: { set: () => {}, get: () => 'message' },
         getBookingChannel: async () => channel,
@@ -95,8 +104,8 @@ for (const action of ['Open', 'Close']) {
       });
       let response;
       await handlers[`handle${action}EventPosition`]({
-        member: { roles: { cache: new Set([role]) } },
-        user: { id: 'staff' },
+        member: who,
+        user: { id: who.id },
         options: { getString: key => key === 'position' ? 'NZAA-R_CTR' : '25/10' },
         deferReply: async () => {},
         editReply: async payload => { response = payload.content; }

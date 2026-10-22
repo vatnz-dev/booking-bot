@@ -14,11 +14,11 @@ const {
   EVENT_NOTIFICATION_LEAD_MS,
   EVENT_NOTIFICATIONS_ROLE_ID,
   LOG_CHANNEL_ID,
-  STAFF_ROLE_IDS,
   THUMBS_UP,
   sectorCodeMap
 } = require('../constants');
 const { cleanEmbedValue } = require('../utils/format');
+const { REFUSALS } = require('./access');
 const { log } = require('../utils/log');
 const {
   DateTime,
@@ -251,7 +251,7 @@ function createEventThreadService({
   clearBookingReminderTimer = () => {},
   rescheduleMentorTimers,
   scheduleBookingReminder = () => {},
-  isStaffMember
+  access
 }) {
   let eventThreadCheckInterval = null;
 
@@ -343,7 +343,7 @@ function createEventThreadService({
     );
 
     const promptMessage = await logChannel.send({
-      content: [...STAFF_ROLE_IDS.map(id => `<@&${id}>`), 'Event thread check required.'].join(' '),
+      content: [...access.mentions('event-prompt'), 'Event thread check required.'].join(' '),
       embeds: [buildEventEmbed(eventData, 'Create Event Thread?')],
       components: [row]
     });
@@ -815,8 +815,10 @@ function createEventThreadService({
   }
 
   async function handleEventThreadButton(interaction) {
-    if (!isStaffMember(interaction.member)) {
-      await interaction.reply({ content: 'You do not have permission to manage event threads.', ephemeral: true });
+    const permission = access.can('event-thread', interaction.member);
+    if (permission !== 'ok') {
+      await interaction.reply({ content: REFUSALS[permission], ephemeral: true });
+      await sendAuditLog({ action: 'Action Refused', actorId: interaction.user?.id, reason: REFUSALS[permission], fields: [{ name: 'Action', value: 'event-thread', inline: true }], color: '#D9534F' });
       return;
     }
 

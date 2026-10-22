@@ -1,8 +1,5 @@
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 const GUILD_ID = (process.env.GUILD_ID || '').trim();
-const { parseStaffRoleIds } = require('./utils/permissions');
-// Keep existing single-role deployments working while supporting several staff roles.
-const STAFF_ROLE_IDS = parseStaffRoleIds(process.env.STAFF_ROLE_IDS || process.env.STAFF_ROLE_ID);
 const EVENT_NOTIFICATIONS_ROLE_ID = process.env.EVENT_NOTIFICATIONS_ROLE_ID;
 const BOOKING_REMINDERS_ENABLED = String(process.env.BOOKING_REMINDERS_ENABLED || 'true').toLowerCase() !== 'false';
 const EVENT_CALENDAR_URL = process.env.EVENT_CALENDAR_URL || 'https://www.vatnz.net/events/calendar/vatnz-lite.ics';
@@ -96,7 +93,6 @@ const allExtendableSectors = [
 
 module.exports = {
   LOG_CHANNEL_ID,
-  STAFF_ROLE_IDS,
   EVENT_NOTIFICATIONS_ROLE_ID,
   BOOKING_REMINDERS_ENABLED,
   EVENT_CALENDAR_URL,

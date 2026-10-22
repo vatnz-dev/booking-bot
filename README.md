@@ -40,7 +40,14 @@ DISCORD_TOKEN=your_bot_token_here
 GUILD_ID=your_server_id_here
 CHANNEL_ID=your_booking_channel_id_here
 LOG_CHANNEL_ID=your_staff_log_channel_id_here
-STAFF_ROLE_IDS=your_senior_staff_role_id,your_ops_staff_role_id,your_board_role_id
+BOT_OWNER_IDS=your_discord_user_id
+BOARD_ROLE_ID=your_board_role_id_here
+SENIOR_STAFF_ROLE_ID=your_senior_staff_role_id_here
+BOOKING_MODERATOR_ROLE_IDS=your_events_team_role_id,your_board_role_id
+EVENT_THREAD_ROLE_IDS=your_events_team_role_id,your_board_role_id
+EVENT_PROMPT_ROLE_IDS=your_events_team_role_id
+EVENT_POSITION_USER_IDS=events_director_user_id,operations_director_user_id,events_manager_user_id
+MENTOR_APPROVER_USER_IDS=training_director_user_id,training_manager_user_id
 EVENT_NOTIFICATIONS_ROLE_ID=your_event_notifications_role_id_here
 FSS_ROLE_ID=your_fss_role_id_here
 TRAINING_TEAM_ROLE_ID=your_training_team_role_id_here
@@ -62,7 +69,17 @@ STATSIM_TIMEOUT_MS=15000
 STATSIM_ZERO_FALLBACK_YEARS=3
 ```
 
-Set `STAFF_ROLE_IDS` to a comma-separated list of the Senior Staff, Ops Staff and Board Member role IDs. A member with any listed role has staff rights for deleting other controllers' bookings, managing event positions and event thread prompts, and toggling StatSim. Event thread prompts mention all configured staff roles. The legacy `STAFF_ROLE_ID` variable still works when `STAFF_ROLE_IDS` is unset or empty. If neither is configured, staff actions are denied.
+Each staff permission has its own list, so a team only gets what its job needs:
+
+| Permission | Setting | Allows |
+|---|---|---|
+| `booking-moderator` | `BOOKING_MODERATOR_ROLE_IDS` | Edit or delete other controllers' bookings |
+| `event-position` | `EVENT_POSITION_USER_IDS` | Open or close event positions |
+| `event-thread` | `EVENT_THREAD_ROLE_IDS` | Create or decline event threads |
+| `event-prompt` | `EVENT_PROMPT_ROLE_IDS` | Pinged by event-thread prompts |
+| `mentor-approver` | `MENTOR_APPROVER_USER_IDS` | Approve mentor bookings on a mentor's behalf |
+
+Roles listed in a permission grant it directly. Users listed in a permission only keep it while they hold `BOARD_ROLE_ID` or `SENIOR_STAFF_ROLE_ID`, so access lapses when someone steps down. Bot owners (`BOT_OWNER_IDS`) can run `/statsim` and `/maintenance access add|remove|list`. The first `/maintenance` change to a permission saves its list in `db/settings.json`, and from then on that saved list is used instead of the environment value. Owners can only be changed in the environment. `STAFF_ROLE_IDS` is no longer used.
 
 Set the rating role variables (`S1_ROLE_ID` through `I3_ROLE_ID`) to your server's corresponding controller roles. These control booking eligibility and rating labels on booking embeds. Set `FSS_ROLE_ID` to the role allowed to book FSS positions. Missing rating roles are ignored; a missing FSS role denies FSS bookings. Restart the bot after changing role configuration.
 

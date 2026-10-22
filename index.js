@@ -7,15 +7,18 @@
   const syncCommands = require('discord-sync-commands');
 
   const path = require('path');
-  const { log, describeSettings } = require('./src/utils/log');
+  const { log, logFailures, describeSettings } = require('./src/utils/log');
   const { event, messages, eventclose, eventThreads, endorsementWarnings, settings, dbPaths } = require('./src/data/databases');
   const commandDefinitions = require('./src/commands/definitions');
-  const { STAFF_ROLE_IDS, GUILD_ID } = require('./src/constants');
+  const { GUILD_ID } = require('./src/constants');
   if (!GUILD_ID) {
     log('error', 'config_missing', { setting: 'GUILD_ID', message: 'GUILD_ID must be set' });
     process.exit(1);
   }
-  const { hasStaffRole } = require('./src/utils/permissions');
+  if (process.env.STAFF_ROLE_IDS || process.env.STAFF_ROLE_ID) {
+    log('warn', 'setting_unused', { setting: 'STAFF_ROLE_IDS', message: 'STAFF_ROLE_IDS is no longer used and grants nothing; use the per-permission settings instead' });
+  }
+  const { createAccess } = require('./src/services/access');
   const { getVatnzEventPositions } = require('./src/services/positions');
   const { createDiscordHelpers } = require('./src/services/discordHelpers');
   const { createAuditLogger } = require('./src/services/auditLog');
@@ -55,9 +58,7 @@
     }
   };
 
-  function isStaffMember(member) {
-    return hasStaffRole(member, STAFF_ROLE_IDS);
-  }
+  const access = createAccess({ settings });
 
   const discordHelpers = createDiscordHelpers({ client });
   const { sendAuditLog } = createAuditLogger({
@@ -116,7 +117,7 @@
     clearBookingReminderTimer: bookingLifecycle.clearBookingReminderTimer,
     rescheduleMentorTimers: bookingLifecycle.rescheduleMentorTimers,
     scheduleBookingReminder: bookingLifecycle.scheduleBookingReminder,
-    isStaffMember
+    access
   });
 
   const endorsementWarningService = createEndorsementWarningService({
@@ -131,7 +132,7 @@
     event,
     eventclose,
     messages,
-    isStaffMember,
+    access,
     getBookingChannel: discordHelpers.getBookingChannel,
     fetchBookingMessage: discordHelpers.fetchBookingMessage,
     sendAuditLog,
@@ -155,6 +156,10 @@
   client.on('messageReactionAdd', bookingLifecycle.handleMentorApprovalReaction);
 
   registerGuildLock({ client, guildId: GUILD_ID });
+  client.once('clientReady', logFailures('named_user_access_check', {}, async () => {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    await access.checkNamedUsers(guild, sendAuditLog);
+  }));
 
   // Register in the VATNZ server only, then remove any commands left over from global registration.
   syncCommands(client, commandDefinitions, { guildId: GUILD_ID })
