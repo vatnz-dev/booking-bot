@@ -14,4 +14,8 @@ VOLUME ["/app/db"]
 
 USER node
 
-CMD ["npm", "start"]
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+
+# Run node directly so Docker's stop signal reaches the bot.
+CMD ["node", "index.js"]

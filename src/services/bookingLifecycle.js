@@ -10,6 +10,7 @@ const {
   TRAINING_TEAM_ROLE_ID
 } = require('../constants');
 const { getMentorRefusal } = require('../utils/permissions');
+const { logFailures } = require('../utils/log');
 const {
   DateTime,
   buildNzDateTime,
@@ -80,7 +81,7 @@ function createBookingLifecycle({
 
   function scheduleExtensionSelectionTimeout(ownerId, messageId) {
     clearExtensionSelectionTimer(messageId);
-    const timeout = setTimeout(async () => {
+    const timeout = setTimeout(logFailures('extension_selection_timeout', { messageId }, async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking) return;
       if (!entry.booking.awaitingExtensionSelection) return;
@@ -106,7 +107,7 @@ function createBookingLifecycle({
       } catch (err) {
         console.warn(`\u26A0\uFE0F Could not DM user ${ownerId} with fallback extension stats:`, err?.message || err);
       }
-    }, 3 * 60 * 1000);
+    }), 3 * 60 * 1000);
 
     extensionSelectionTimeouts.set(messageId, timeout);
   }
@@ -151,7 +152,7 @@ function createBookingLifecycle({
 
   function scheduleMentorTagTimeout(ownerId, messageId, delayMs = MENTOR_TAG_TIMEOUT_MS) {
     clearMentorTimers(messageId);
-    const timeout = setTimeout(async () => {
+    const timeout = setTimeout(logFailures('mentor_tag_timeout', { messageId }, async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking.mentorRequired) return;
       if (entry.booking.mentorId) return;
@@ -162,7 +163,7 @@ function createBookingLifecycle({
         auditAction: 'Mentor Tag Timeout Auto-Delete',
         auditReason: 'Controller did not tag a mentor within 5 minutes'
       });
-    }, Math.max(1000, delayMs));
+    }), Math.max(1000, delayMs));
     mentorTagTimeouts.set(messageId, timeout);
   }
 
@@ -170,7 +171,7 @@ function createBookingLifecycle({
     const existing = mentorApprovalTimeouts.get(messageId);
     if (existing) clearTimeout(existing);
 
-    const timeout = setTimeout(async () => {
+    const timeout = setTimeout(logFailures('mentor_approval_timeout', { messageId }, async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking.mentorRequired) return;
       if (entry.booking.mentorApproved) return;
@@ -181,7 +182,7 @@ function createBookingLifecycle({
         auditAction: 'Mentor Approval Timeout Auto-Delete',
         auditReason: 'Mentor did not approve within 30 minutes'
       });
-    }, Math.max(1000, delayMs));
+    }), Math.max(1000, delayMs));
     mentorApprovalTimeouts.set(messageId, timeout);
   }
 

@@ -3,6 +3,7 @@ services:
     image: ghcr.io/vatnz-dev/booking-bot:1
     container_name: vatnz-booking-bot
     restart: unless-stopped
+    init: true
     env_file:
       - .env
     volumes:
