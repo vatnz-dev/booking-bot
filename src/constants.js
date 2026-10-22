@@ -1,4 +1,5 @@
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
+const GUILD_ID = (process.env.GUILD_ID || '').trim();
 const { parseStaffRoleIds } = require('./utils/permissions');
 // Keep existing single-role deployments working while supporting several staff roles.
 const STAFF_ROLE_IDS = parseStaffRoleIds(process.env.STAFF_ROLE_IDS || process.env.STAFF_ROLE_ID);
@@ -115,6 +116,7 @@ module.exports = {
   MENTOR_TAG_TIMEOUT_MS,
   MENTOR_APPROVAL_TIMEOUT_MS,
   FSS_ROLE_ID,
+  GUILD_ID,
   TRAINING_TEAM_ROLE_ID,
   THUMBS_UP,
   ratingRoleIds,

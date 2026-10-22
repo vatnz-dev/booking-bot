@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+process.env.GUILD_ID = 'vatnz';
 function stub(modulePath, exports) {
   require.cache[require.resolve(modulePath)] = { exports, loaded: true };
 }

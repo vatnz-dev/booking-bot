@@ -11,6 +11,7 @@ const {
 
 const {
   FSS_ROLE_ID,
+  GUILD_ID,
   TRAINING_TEAM_ROLE_ID,
   MIN_BOOKING_DURATION_MINUTES,
   THUMBS_UP,
@@ -1335,6 +1336,12 @@ function createInteractionHandlers({
       const startedAt = Date.now();
       let result = 'ok';
       try {
+        if (interaction.guildId !== GUILD_ID) {
+          result = 'ignored';
+          log('warn', 'interaction_other_guild', { guildId: interaction.guildId, interactionId: interaction.id });
+          return;
+        }
+
         if (interaction.isChatInputCommand()) {
           switch (interaction.commandName) {
             case 'closeeventposition':

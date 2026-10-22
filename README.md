@@ -37,6 +37,7 @@ Copy `.env.example` to `.env` in the project root, then fill in your real Discor
 
 ```env
 DISCORD_TOKEN=your_bot_token_here
+GUILD_ID=your_server_id_here
 CHANNEL_ID=your_booking_channel_id_here
 LOG_CHANNEL_ID=your_staff_log_channel_id_here
 STAFF_ROLE_IDS=your_senior_staff_role_id,your_ops_staff_role_id,your_board_role_id

@@ -116,7 +116,19 @@ function registerReadyHandlers({
   });
 }
 
+// The bot only serves one server; leave any other it is added to or already in.
+function registerGuildLock({ client, guildId }) {
+  async function leaveIfForeign(guild) {
+    if (guild.id === guildId) return;
+    log('warn', 'left_guild', { guildId: guild.id, guildName: guild.name });
+    await guild.leave().catch(error => log('error', 'leave_guild_failed', { guildId: guild.id, error }));
+  }
+  client.on('guildCreate', leaveIfForeign);
+  client.once('clientReady', () => Promise.all(client.guilds.cache.map(leaveIfForeign)));
+}
+
 module.exports = {
   registerReadyHandlers,
+  registerGuildLock,
   ensureBookingPanel
 };
