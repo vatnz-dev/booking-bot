@@ -11,6 +11,7 @@ const {
 
 const {
   FSS_ROLE_ID,
+  TRAINING_TEAM_ROLE_ID,
   MIN_BOOKING_DURATION_MINUTES,
   THUMBS_UP,
   allExtendableSectors,
@@ -37,6 +38,8 @@ const {
 const { cleanEmbedValue } = require('../utils/format');
 const { createEditBookingHandlers } = require('./editBookings');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
+const { getMentorRefusal } = require('../utils/permissions');
+const { log } = require('../utils/log');
 const {
   resolveAerodromes,
   formatAerodromeTraffic,
@@ -1285,6 +1288,18 @@ function createInteractionHandlers({
   async function handleMentor(interaction) {
     const userId = String(interaction.member.user.id);
     const mentor = interaction.options.getMember('mentor');
+    const refusal = getMentorRefusal(mentor, userId, TRAINING_TEAM_ROLE_ID);
+    if (refusal) {
+      await interaction.reply({ content: `❌ ${refusal}`, ephemeral: true });
+      await sendAuditLog({
+        action: 'Mentor Request Refused',
+        actorId: userId,
+        reason: refusal,
+        fields: [{ name: 'Tagged', value: mentor?.id ? `<@${mentor.id}> (${mentor.id})` : 'Unknown member', inline: true }],
+        color: '#D9534F'
+      });
+      return;
+    }
     const userBookings = messages.get(userId);
 
     if (!Array.isArray(userBookings) || userBookings.length === 0) {
@@ -1317,6 +1332,8 @@ function createInteractionHandlers({
 
   function registerInteractionHandlers() {
     client.on('interactionCreate', async (interaction) => {
+      const startedAt = Date.now();
+      let result = 'ok';
       try {
         if (interaction.isChatInputCommand()) {
           switch (interaction.commandName) {
@@ -1395,7 +1412,8 @@ function createInteractionHandlers({
           }
         }
       } catch (err) {
-        console.error('Interaction handler failed:', err);
+        result = 'error';
+        log('error', 'interaction_failed', { interactionId: interaction.id, error: err });
         try {
           const payload = { content: 'Something went wrong while handling that interaction. Please try again.', components: [], ephemeral: true };
           if (interaction.deferred || interaction.replied) {
@@ -1406,6 +1424,16 @@ function createInteractionHandlers({
         } catch (replyErr) {
           console.warn('Could not send interaction error response:', replyErr?.message || replyErr);
         }
+      } finally {
+        log('info', 'interaction', {
+          name: interaction.commandName ?? interaction.customId,
+          userId: interaction.user?.id,
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          interactionId: interaction.id,
+          result,
+          ms: Date.now() - startedAt
+        });
       }
     });
   }

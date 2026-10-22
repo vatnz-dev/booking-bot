@@ -1,7 +1,18 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { parseStaffRoleIds, hasStaffRole } = require('../src/utils/permissions');
+const { parseStaffRoleIds, hasStaffRole, getMentorRefusal } = require('../src/utils/permissions');
+
+test('only training team members other than the mentee can mentor, and an unset role fails closed', () => {
+  const mentor = (id, roles, extra = {}) => ({ id, displayName: id, roles: { cache: new Set(roles) }, user: { id }, ...extra });
+  assert.equal(getMentorRefusal(mentor('morgan', ['training']), 'sam', 'training'), null);
+  assert.equal(getMentorRefusal(mentor('sam', ['training']), 'sam', 'training'), "You can't be your own mentor.");
+  assert.equal(getMentorRefusal(mentor('bot', ['training'], { user: { id: 'bot', bot: true } }), 'sam', 'training'), "Bots can't be mentors.");
+  assert.equal(getMentorRefusal(mentor('alex', ['controller']), 'sam', 'training'), "alex isn't a mentor or instructor.");
+  assert.equal(getMentorRefusal(mentor('morgan', ['training']), 'sam', ''), "morgan isn't a mentor or instructor.");
+  assert.equal(getMentorRefusal({ user: { id: 'sam' }, roles: ['training'] }, 'sam', 'training'), "You can't be your own mentor.");
+  assert.equal(getMentorRefusal(null, 'sam', 'training'), "That member isn't a mentor or instructor.");
+});
 
 test('staff roles accept a trimmed, deduplicated comma-separated list', () => {
   assert.deepEqual(parseStaffRoleIds(' senior, ops, board, senior, ,'), ['senior', 'ops', 'board']);
