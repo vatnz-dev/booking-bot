@@ -5,7 +5,7 @@ const { DateTime, NZ_ZONE, buildNzDateTime, getBookingDisplayInterval, parseDdMm
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
 const { validateVatnzPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
-const { applySoloEndorsementOverride, getBookingStartNz, buildSoloNotice, formatEndorsementScope } = require('../services/soloEndorsements');
+const { applySoloEndorsementOverride, buildOverrideAuditEntry, getBookingStartNz, buildSoloNotice, formatEndorsementScope } = require('../services/soloEndorsements');
 const { formatSectorTraffic, formatAerodromeTraffic } = require('../services/traffic');
 const { log } = require('../utils/log');
 
@@ -101,7 +101,7 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
       if (validation.meta.suffix === 'FSS' && !member.roles.cache.has(FSS_ROLE_ID)) return fail('The controller needs the Oceanic Endorsement for this FSS position.');
       const cid = await getVatsimId(session.ownerId);
       if (!cid) return fail('Could not retrieve the controller\'s linked VATSIM ID. Please try again later.');
-      const eligibility = await applySoloEndorsementOverride({ baseEligibility: evaluateBookingEligibility(member, position), cid, member, position, bookingDateNz: getBookingStartNz(date, start) });
+      const eligibility = await applySoloEndorsementOverride({ baseEligibility: evaluateBookingEligibility(member, position), cid, member, position, bookingDateNz: getBookingStartNz(date, start), audit: sendAuditLog });
       if (!eligibility.allowed) return fail(eligibility.reason);
 
       const isCtr = position.endsWith('_CTR') && position !== 'NZAA-R_CTR';
@@ -194,7 +194,8 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
       for (const action of [
         () => refreshEventCoverageNotificationsForBooking(before),
         () => refreshEventCoverageNotificationsForBooking(candidate),
-        () => sendAuditLog({ action: 'Booking Edited', actorId: interaction.user.id, targetUserId: session.ownerId, booking: candidate, reason: `Previously ${before.position} ${formatBookingWindowForDiscord(before)}; sectors: ${(before.extendedSectors || []).join(', ') || 'none'}`, color: '#00AEFF' })
+        () => sendAuditLog({ action: 'Booking Edited', actorId: interaction.user.id, targetUserId: session.ownerId, booking: candidate, reason: `Previously ${before.position} ${formatBookingWindowForDiscord(before)}; sectors: ${(before.extendedSectors || []).join(', ') || 'none'}`, color: '#00AEFF' }),
+        ...(solo ? [() => sendAuditLog(buildOverrideAuditEntry(solo, session.ownerId, candidate))] : [])
       ]) {
         try { await action(); } catch (err) { log('warn', 'edit_notification_failed', { error: err }); }
       }

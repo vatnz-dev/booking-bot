@@ -56,6 +56,7 @@ const { getVatsimId } = require('../services/vatsim');
 const {
   applySoloEndorsementOverride,
   buildExpiryWarning,
+  buildOverrideAuditEntry,
   buildSoloNotice,
   daysUntilEnd,
   endorsementCoversDate,
@@ -185,7 +186,7 @@ function createInteractionHandlers({
 
     let endorsements;
     try {
-      endorsements = await fetchSoloEndorsements();
+      endorsements = await fetchSoloEndorsements({ audit: sendAuditLog });
     } catch (err) {
       log('warn', 'endorsements_fetch_failed', { command: 'myendorsements', error: err });
       await interaction.editReply({ content: 'Could not fetch VATNZ solo endorsements right now. Please try again later.' });
@@ -570,7 +571,8 @@ function createInteractionHandlers({
         cid: vatsimId,
         member,
         position: pos,
-        bookingDateNz
+        bookingDateNz,
+        audit: sendAuditLog
       });
       if (!eligibility.allowed) {
         return i.editReply({ content: eligibility.reason, ephemeral: true });
@@ -782,6 +784,7 @@ function createInteractionHandlers({
         reason: matchingEventThread ? `Routed to event thread: ${matchedEventName}` : 'Controller created a booking',
         color: '#00AEFF'
       });
+      if (soloEndorsement) await sendAuditLog(buildOverrideAuditEntry(soloEndorsement, userId, createdBooking));
 
       const prevDate = getPreviousWeekNZ(date, String(start).padStart(4, '0'));
       if (mentorRequired) {

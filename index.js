@@ -127,7 +127,8 @@
     client,
     messages,
     endorsementWarnings,
-    getVatsimId
+    getVatsimId,
+    sendAuditLog
   });
 
   const interactionHandlers = createInteractionHandlers({
