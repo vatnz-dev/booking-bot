@@ -4,7 +4,6 @@ const { DateTime, Settings } = require('luxon');
 process.env.S1_ROLE_ID = 'student';
 process.env.I1_ROLE_ID = 'instructor';
 process.env.I3_ROLE_ID = 'senior-instructor';
-process.env.STAFF_ROLE_IDS = 'staff-role,mentor-role';
 const fixedNow = DateTime.fromISO('2026-10-20T19:00:00+13:00').toMillis();
 Settings.now = () => fixedNow;
 const stub = (path, exports) => { require.cache[require.resolve(path)] = { exports, loaded: true }; };
@@ -14,10 +13,7 @@ stub('../src/services/vatsim', { getVatsimId: async () => '1234567' });
 stub('../src/services/soloEndorsements', { applySoloEndorsementOverride: async ({ baseEligibility }) => baseEligibility });
 const { createInteractionHandlers } = require('../src/handlers/interactions');
 const { createBookingLifecycle } = require('../src/services/bookingLifecycle');
-const { createEventThreadService } = require('../src/services/eventThreads');
-const { createBookingMutationQueue } = require('../src/utils/bookingMutations');
 const { resolveBookingWindow } = require('../src/utils/time');
-const { isEligibleMentor } = require('../src/utils/mentor');
 const noop = () => {};
 const member = (id, roles = [], bot = false) => ({ id, user: { id, bot, username: id, displayAvatarURL: () => 'https://example.com/avatar.png' }, roles: { cache: new Set(roles) }, send: async () => {} });
 const timerNames = ['clearMentorTimers', 'clearExtensionSelectionTimer', 'clearBookingReminderTimer', 'scheduleBookingReminder', 'scheduleMentorTagTimeout', 'scheduleMentorApprovalTimeout', 'scheduleExtensionSelectionTimeout'];
@@ -29,12 +25,10 @@ function fixture(initial = {}) {
     set: (id, value) => { data[id] = structuredClone(value); }
   };
   const responses = [], deleted = [], posts = [];
-  const mentor = member('mentor', ['mentor-role']);
-  const guild = { id: 'guild', members: { cache: new Map([['mentor', mentor]]), fetch: async id => id === 'mentor' ? mentor : member(id) } };
+  const guild = { id: 'guild' };
   const channel = { id: 'channel', guild, send: async payload => { posts.push(payload); return { id: `new-${posts.length}`, delete: async () => {} }; } };
-  const runBookingMutation = createBookingMutationQueue();
   const dependencies = {
-    messages, runBookingMutation, client: { users: { fetch: async id => member(id) } },
+    messages, client: { users: { fetch: async id => member(id) } },
     isStaffMember: () => false, getBookingChannel: async () => channel,
     fetchBookingMessage: async b => ({ id: b.messageId, guild, embeds: [], react: async () => {}, delete: async () => deleted.push(b.messageId) }),
     sendAuditLog: async () => {}, eventThreadService: { findMatchingEventThreadForBooking: async () => null, refreshEventCoverageNotificationsForBooking: async () => {} },
@@ -42,70 +36,14 @@ function fixture(initial = {}) {
   };
   const interaction = {
     user: member('owner').user, member: member('owner'), guild,
-    options: { getUser: () => null, getMember: () => mentor },
+    options: { getUser: () => null },
     reply: async p => responses.push(p), editReply: async p => responses.push(p), followUp: async p => responses.push(p),
     deferReply: async () => {}, deferUpdate: async () => {}, isModalSubmit: () => true,
     fields: { getTextInputValue: key => ({ pos: 'NZAA_CTR', date: '21/10', start: '1900', end: '2100' })[key] }
   };
-  return { data, messages, responses, deleted, posts, mentor, guild, channel, dependencies, interaction, handlers: createInteractionHandlers(dependencies) };
+  return { data, messages, responses, deleted, posts, guild, channel, dependencies, interaction, handlers: createInteractionHandlers(dependencies) };
 }
 const booking = (id, extra = {}) => ({ messageId: id, position: 'NZCH_TWR', date: '21/10', start: 1900, end: 2100, extendedSectors: [], ...extra });
-
-test('delete picker keeps identity after a preceding booking disappears and rejects stale/legacy values', async () => {
-  const f = fixture({ owner: [booking('A'), booking('B'), booking('C')] });
-  await f.handlers.handleDeleteBookings(f.interaction);
-  const options = f.responses[0].components[0].toJSON().components[0].options;
-  f.data.owner.shift();
-  await f.handlers.handleDeleteBookingSelect({ ...f.interaction, values: [options[1].value] });
-  assert.deepEqual(f.deleted, ['B']);
-  for (const value of [options[0].value, options[1].value, 'owner|0', '0']) {
-    await f.handlers.handleDeleteBookingSelect({ ...f.interaction, values: [value] });
-  }
-  assert.deepEqual(f.data.owner.map(b => b.messageId), ['C']);
-});
-
-test('mentor permissions use STAFF_ROLE_IDS, including its mentor entry, without I1/I3 fallback', () => {
-  assert.equal(isEligibleMentor(member('owner', ['mentor-role']), 'owner'), false);
-  assert.equal(isEligibleMentor(member('bot', ['mentor-role'], true), 'owner'), false);
-  assert.equal(isEligibleMentor(member('other'), 'owner'), false);
-  assert.equal(isEligibleMentor(member('other', ['mentor-role']), 'owner'), true);
-  assert.equal(isEligibleMentor(member('staff', ['staff-role']), 'owner'), true);
-  assert.equal(isEligibleMentor(member('other', ['instructor', 'senior-instructor']), 'owner'), false);
-});
-
-test('mentor selection uses stable identity and checks current membership roles', async () => {
-  const f = fixture({ owner: [booking('A'), booking('B', { mentorRequired: true })] });
-  await f.handlers.handleMentor(f.interaction);
-  const values = f.responses[0].components[0].toJSON().components[0].options.map(o => o.value);
-  f.data.owner.shift();
-  await f.handlers.handleMentorBookingSelect({ ...f.interaction, values: [values[0]] });
-  assert.equal(f.data.owner[0].mentorId, undefined);
-  f.mentor.roles.cache.clear();
-  await f.handlers.handleMentorBookingSelect({ ...f.interaction, values: [values[1]] });
-  assert.equal(f.data.owner[0].mentorId, undefined);
-  f.mentor.roles.cache.add('mentor-role');
-  await f.handlers.handleMentorBookingSelect({ ...f.interaction, values: [values[1]] });
-  assert.equal(f.data.owner[0].mentorId, 'mentor');
-  await f.handlers.handleMentorBookingSelect({ ...f.interaction, values: ['id:B|owner'] });
-  assert.equal(f.data.owner[0].mentorId, 'mentor');
-});
-
-test('approval rejects legacy self-tags, role loss and other users, then accepts designated mentor', async () => {
-  const f = fixture({ owner: [booking('A', { mentorRequired: true, mentorId: 'owner' })] });
-  const lifecycle = createBookingLifecycle({ ...f.dependencies, fetchBookingMessage: async () => null });
-  const reaction = { emoji: { name: '\u{1F44D}' }, message: { id: 'A', guild: f.guild } };
-  await lifecycle.handleMentorApprovalReaction(reaction, { id: 'owner' });
-  assert.ok(!f.data.owner[0].mentorApproved);
-  f.data.owner[0].mentorId = 'mentor';
-  f.mentor.roles.cache.clear();
-  await lifecycle.handleMentorApprovalReaction(reaction, { id: 'mentor' });
-  assert.ok(!f.data.owner[0].mentorApproved);
-  f.mentor.roles.cache.add('mentor-role');
-  await lifecycle.handleMentorApprovalReaction(reaction, { id: 'other' });
-  assert.ok(!f.data.owner[0].mentorApproved);
-  await lifecycle.handleMentorApprovalReaction(reaction, { id: 'mentor' });
-  assert.equal(f.data.owner[0].mentorApproved, true);
-});
 
 for (const other of [
   booking('B', { position: 'NZCH-B_CTR' }),
@@ -154,61 +92,6 @@ test('create rejects today past start without publishing or saving', async () =>
   assert.deepEqual(f.data, {});
 });
 
-test('cleanup and create share a queue so a saved booking survives Discord deletion', async () => {
-  const f = fixture({ owner: [booking('expired', { endUtc: '2026-10-20T04:00:00Z' })] });
-  let release, entered;
-  const gate = new Promise(r => { release = r; });
-  const reached = new Promise(r => { entered = r; });
-  const lifecycle = createBookingLifecycle({ ...f.dependencies, fetchBookingMessage: async () => { entered(); await gate; return { delete: async () => {} }; } });
-  const cleanup = lifecycle.cleanupExpiredBookings();
-  await reached;
-  const create = f.handlers.handlePlan(f.interaction);
-  await Promise.resolve();
-  assert.equal(f.posts.length, 0);
-  release();
-  await Promise.all([cleanup, create]);
-  assert.equal(f.data.owner.length, 1);
-  assert.equal(f.data.owner[0].messageId, 'new-1');
-});
-
-test('event relocation serializes with deletion and a stale menu cannot resurrect the booking', async () => {
-  const f = fixture({ owner: [booking('A')] });
-  let release, entered;
-  const gate = new Promise(r => { release = r; });
-  const reached = new Promise(r => { entered = r; });
-  const event = { uid: 'event', title: 'Test', startUtcISO: '2026-10-21T06:00:00Z', endUtcISO: '2026-10-21T08:00:00Z' };
-  const service = createEventThreadService({ ...f.dependencies, ...f.dependencies.bookingLifecycle, rescheduleMentorTimers: noop });
-  const move = service.moveBookingsIntoEventThread(event, { id: 'thread', guild: f.guild, send: async () => { entered(); await gate; return { id: 'moved' }; } });
-  await reached;
-  const deletion = f.handlers.handleDeleteBookingSelect({ ...f.interaction, values: ['owner|id:A'] });
-  release(); await Promise.all([move, deletion]);
-  assert.equal(f.data.owner[0].messageId, 'moved');
-  await f.handlers.handleDeleteBookingSelect({ ...f.interaction, values: ['owner|id:moved'] });
-  assert.deepEqual(f.data.owner, []);
-});
-
-test('a reminder in flight cannot overwrite a new booking for the same owner', async t => {
-  const f = fixture({ owner: [booking('existing')] });
-  let callback, release, entered;
-  const gate = new Promise(r => { release = r; });
-  const reached = new Promise(r => { entered = r; });
-  t.mock.method(global, 'setTimeout', fn => { callback = fn; return {}; });
-  t.mock.method(global, 'clearTimeout', noop);
-  const lifecycle = createBookingLifecycle({ ...f.dependencies, client: { users: { fetch: async () => ({ send: async () => { entered(); await gate; } }) } } });
-  lifecycle.scheduleBookingReminder('owner', f.data.owner[0]);
-  callback();
-  await reached;
-  f.interaction.fields.getTextInputValue = key => ({ pos: 'NZAA_CTR', date: '22/10', start: '1900', end: '2100' })[key];
-  const create = f.handlers.handlePlan(f.interaction);
-  await Promise.resolve();
-  assert.equal(f.posts.length, 0);
-  release();
-  await create;
-  assert.equal(f.data.owner.length, 2);
-  assert.ok(f.data.owner[0].reminderSentAt);
-  assert.equal(f.data.owner[1].messageId, 'new-1');
-});
-
 test('restart restores overdue mentor deadlines and remaining approval time without resetting them', async t => {
   const f = fixture({ owner: [
     booking('untagged', { mentorRequired: true, createdAt: '2026-10-20T05:00:00Z', reminderSentAt: 'sent' }),
@@ -227,13 +110,6 @@ test('restart restores overdue mentor deadlines and remaining approval time with
   await scheduled[1].callback();
   assert.deepEqual(f.data.owner.map(b => b.messageId), ['approved']);
 });
-
-test('a failed mutation releases the shared queue', async () => {
-  const run = createBookingMutationQueue();
-  await assert.rejects(run(async () => { throw new Error('failure'); }), /failure/);
-  assert.equal(await run(async () => 42), 42);
-});
-
 
 test('new booking embed displays I1 when the controller also holds S1', async () => {
   const f = fixture();

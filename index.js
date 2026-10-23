@@ -59,12 +59,9 @@
     getBookingMessageLink: discordHelpers.getBookingMessageLink
   });
 
-  const { createBookingMutationQueue } = require('./src/utils/bookingMutations');
-  const runBookingMutation = createBookingMutationQueue();
   let eventThreadService;
 
   const bookingLifecycle = createBookingLifecycle({
-    runBookingMutation,
     client,
     messages,
     fetchBookingMessage: discordHelpers.fetchBookingMessage,
@@ -74,7 +71,6 @@
   });
 
   eventThreadService = createEventThreadService({
-    runBookingMutation,
     eventThreads,
     messages,
     fetchDiscordChannel: discordHelpers.fetchDiscordChannel,
@@ -98,7 +94,6 @@
   });
 
   const interactionHandlers = createInteractionHandlers({
-    runBookingMutation,
     client,
     event,
     eventclose,

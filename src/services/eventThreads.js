@@ -1,4 +1,3 @@
-const { createBookingMutationQueue } = require('../utils/bookingMutations');
 const axios = require('axios');
 const {
   ActionRowBuilder,
@@ -239,7 +238,6 @@ async function fetchVatnzEvents() {
 }
 
 function createEventThreadService({
-  runBookingMutation = createBookingMutationQueue(),
   eventThreads,
   messages,
   fetchDiscordChannel,
@@ -603,11 +601,7 @@ function createEventThreadService({
     }
   }
 
-  function moveBookingsIntoEventThread(eventData, thread) {
-    return runBookingMutation(() => moveBookingsIntoEventThreadUnlocked(eventData, thread));
-  }
-
-  async function moveBookingsIntoEventThreadUnlocked(eventData, thread) {
+  async function moveBookingsIntoEventThread(eventData, thread) {
     const moved = [];
     const rawDB = messages.all();
 

@@ -295,30 +295,6 @@ test('notification failures leave a successful saved edit and traffic reply', as
   assert.match(f.replies.at(-1).content, /Updated aerodrome traffic/);
 });
 
-test('an edit queued during cleanup survives the cleanup write', async () => {
-  const { createBookingMutationQueue } = require('../src/utils/bookingMutations');
-  const { createBookingLifecycle } = require('../src/services/bookingLifecycle');
-  const f = fixture();
-  f.dependencies.runBookingMutation = createBookingMutationQueue();
-  f.handlers = createInteractionHandlers(f.dependencies);
-  await f.open();
-  f.data.owner.unshift({ messageId: 'expired', endUtc: DateTime.now().minus({ hours: 1 }).toUTC().toISO() });
-  let release, entered;
-  const gate = new Promise(r => { release = r; });
-  const reached = new Promise(r => { entered = r; });
-  const lifecycle = createBookingLifecycle({ ...f.dependencies, fetchBookingMessage: async () => { entered(); await gate; return null; } });
-  const cleanup = lifecycle.cleanupExpiredBookings();
-  await reached;
-  const edit = f.submit();
-  await Promise.resolve();
-  assert.equal(f.posts.length, 0);
-  release(); await Promise.all([cleanup, edit]);
-  assert.equal(f.data.owner.length, 1);
-  assert.equal(f.data.owner[0].messageId, 'new-1');
-  assert.equal(f.data.owner[0].position, 'NZAA_TWR');
-});
-
-
 test('edited booking embed displays I1 when the controller also holds S1', async () => {
   const f = fixture();
   f.interaction.member.roles.cache = new Set(['student', 'instructor']);

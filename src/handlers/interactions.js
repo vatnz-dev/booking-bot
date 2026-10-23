@@ -33,9 +33,7 @@ const {
   parseHhmm,
   toDiscordTimestamp
 } = require('../utils/time');
-const { createBookingMutationQueue } = require('../utils/bookingMutations');
 const { getControllerRatingLabel } = require('../utils/controllerRating');
-const { isEligibleMentor } = require('../utils/mentor');
 const { cleanEmbedValue } = require('../utils/format');
 const { createEditBookingHandlers } = require('./editBookings');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
@@ -126,10 +124,17 @@ function createInteractionHandlers({
   fetchBookingMessage,
   sendAuditLog,
   eventThreadService,
-  bookingLifecycle,
-  runBookingMutation = createBookingMutationQueue()
+  bookingLifecycle
 }) {
   const buttonCooldowns = new Map();
+  // Serialize booking changes across controllers, including async Discord sends,
+  // so a second submission sees the first submission's committed sectors.
+  let bookingMutation = Promise.resolve();
+  function runBookingMutation(action) {
+    const next = bookingMutation.then(action);
+    bookingMutation = next.catch(() => {});
+    return next;
+  }
   const editHandlers = createEditBookingHandlers({ client, messages, event, isStaffMember, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation });
   const {
     clearMentorTimers,
@@ -239,10 +244,10 @@ function createInteractionHandlers({
       return;
     }
 
-    const options = userBookings.slice(0, 25).map(b => ({
+    const options = userBookings.slice(0, 25).map((b, index) => ({
       label: `${b.position} on ${b.date} at ${b.start}`,
       description: `Ends at ${b.end}`,
-      value: `${targetUserId}|id:${b.messageId}`
+      value: `${targetUserId}|${index}`
     }));
 
     const row = new ActionRowBuilder().addComponents(
@@ -370,7 +375,10 @@ function createInteractionHandlers({
 
   async function deleteBookingSelection(interaction) {
     const userId = String(interaction.member.user.id);
-    const [targetUserFromValue, identity] = String(interaction.values[0]).split('|');
+    const [targetUserFromValue, selectedIndexFromValue] = String(interaction.values[0]).includes('|')
+      ? interaction.values[0].split('|')
+      : [userId, interaction.values[0]];
+    const selectedIndex = parseInt(selectedIndexFromValue, 10);
     const targetUserId = String(targetUserFromValue);
     const staff = isStaffMember(interaction.member);
 
@@ -383,10 +391,8 @@ function createInteractionHandlers({
     }
 
     const userBookings = messages.get(targetUserId);
-    const selectedIndex = identity?.startsWith('id:') && Array.isArray(userBookings)
-      ? userBookings.findIndex(b => b.messageId === identity.slice(3)) : -1;
 
-    if (selectedIndex < 0) {
+    if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
       await interaction.editReply({
         content: '\u274C Booking not found.',
         components: []
@@ -1089,27 +1095,16 @@ function createInteractionHandlers({
   async function handleMentorBookingSelect(interaction) {
     await interaction.deferUpdate();
 
-    return runBookingMutation(() => mentorBookingSelection(interaction));
-  }
-
-  async function mentorBookingSelection(interaction) {
-    const [identity, mentorId] = interaction.values[0].split('|');
+    const [selectedIndex, mentorId] = interaction.values[0].split('|');
     const userId = String(interaction.member.user.id);
     const userBookings = messages.get(userId);
 
-    const selectedIndex = identity?.startsWith('id:') && Array.isArray(userBookings)
-      ? userBookings.findIndex(b => b.messageId === identity.slice(3)) : -1;
-    if (selectedIndex < 0) {
+    if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
       await interaction.editReply({
         content: '\u274C Booking not found.',
         components: []
       });
       return;
-    }
-
-    const mentor = await interaction.guild?.members.fetch(mentorId).catch(() => null);
-    if (!isEligibleMentor(mentor, userId)) {
-      return interaction.editReply({ content: 'Select another controller with a configured staff or mentor role.', components: [] });
     }
 
     const booking = userBookings[selectedIndex];
@@ -1197,9 +1192,6 @@ function createInteractionHandlers({
   async function handleMentor(interaction) {
     const userId = String(interaction.member.user.id);
     const mentor = interaction.options.getMember('mentor');
-    if (!isEligibleMentor(mentor, userId)) {
-      return interaction.reply({ content: 'Select another controller with a configured staff or mentor role.', ephemeral: true });
-    }
     const userBookings = messages.get(userId);
 
     if (!Array.isArray(userBookings) || userBookings.length === 0) {
@@ -1210,10 +1202,10 @@ function createInteractionHandlers({
       return;
     }
 
-    const options = userBookings.slice(0, 25).map(b => ({
+    const options = userBookings.map((b, index) => ({
       label: `${b.position} on ${b.date} at ${b.start}`,
       description: `Ends at ${b.end}`,
-      value: `id:${b.messageId}|${mentor.id}`
+      value: `${index}|${mentor.id}`
     }));
 
     const row = new ActionRowBuilder().addComponents(
