@@ -289,6 +289,7 @@ function createBookingLifecycle({
 
       for (const booking of bookings) {
         rescheduleBookingReminder(ownerId, booking);
+        rescheduleMentorTimers(ownerId, booking);
       }
     }
   }

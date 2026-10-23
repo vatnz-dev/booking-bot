@@ -2,7 +2,6 @@ const cheerio = require('cheerio');
 const axios = require('axios');
 
 const {
-  ratingRoleIds,
   FALLBACK_EVENT_POSITIONS,
   VATNZ_POSITIONS_URL,
   VATNZ_POSITION_CACHE_MS
@@ -14,12 +13,7 @@ let vatnzPositionCache = {
   positions: new Map()
 };
 
-function getControllerTier(member) {
-  for (const rating of ['I3', 'I1', 'C3', 'C1', 'S3', 'S2', 'S1']) {
-    if (ratingRoleIds[rating] && member.roles.cache.has(ratingRoleIds[rating])) return rating;
-  }
-  return 'UNRATED';
-}
+const { getControllerTier } = require('../utils/controllerRating');
 
 function getPositionType(position) {
   if (position.endsWith('_CTR')) return 'CTR';

@@ -1,11 +1,12 @@
 const { randomUUID } = require('node:crypto');
 const { ActionRowBuilder, EmbedBuilder, ModalBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
-const { allExtendableSectors, autoInheritanceMap, sectorCodeMap, FSS_ROLE_ID, MIN_BOOKING_DURATION_MINUTES, roleMap } = require('../constants');
-const { DateTime, NZ_ZONE, buildNzDateTime, getBookingDisplayInterval, parseDdMm, parseHhmm, getDurationMinutes, convertToUTC, formatBookingWindowForDiscord, formatBookingDateForDiscord, formatBookingStartForDiscord, formatBookingEndForDiscord } = require('../utils/time');
+const { allExtendableSectors, autoInheritanceMap, sectorCodeMap, FSS_ROLE_ID, MIN_BOOKING_DURATION_MINUTES } = require('../constants');
+const { parseDdMm, parseHhmm, getDurationMinutes, resolveBookingWindow, formatBookingWindowForDiscord, formatBookingDateForDiscord, formatBookingStartForDiscord, formatBookingEndForDiscord } = require('../utils/time');
+const { getControllerRatingLabel } = require('../utils/controllerRating');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
 const { validateVatnzPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
-const { applySoloEndorsementOverride, getBookingStartNz, buildSoloNotice, formatEndorsementScope } = require('../services/soloEndorsements');
+const { applySoloEndorsementOverride, buildSoloNotice, formatEndorsementScope } = require('../services/soloEndorsements');
 const { formatSectorTraffic, formatAerodromeTraffic } = require('../services/traffic');
 
 // Compare editable and lifecycle state too: an old form must never overwrite a
@@ -92,6 +93,8 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
       if (!parseDdMm(date)) return fail('Date must be valid and in DD/MM format.');
       if (!/^\d{4}$/.test(start) || !/^\d{4}$/.test(end) || !parseHhmm(start) || !parseHhmm(end)) return fail('Start and end must be valid 24-hour HHMM times.');
       if (getDurationMinutes(start, end) < MIN_BOOKING_DURATION_MINUTES) return fail(`End must be after start, with at least ${MIN_BOOKING_DURATION_MINUTES} minutes booked.`);
+      const window = resolveBookingWindow(date, start, end, before);
+      if (!window) return fail('Choose a valid future session, or keep an active booking on its current date.');
       const validation = await validateVatnzPosition(position);
       if (!validation.valid) return fail(validation.reason);
       if (validation.meta.isEvent && event.get(position) !== date) return fail('This event-only position is not open on that date.');
@@ -99,7 +102,7 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
       if (validation.meta.suffix === 'FSS' && !member.roles.cache.has(FSS_ROLE_ID)) return fail('The controller needs the Oceanic Endorsement for this FSS position.');
       const cid = await getVatsimId(session.ownerId);
       if (!cid) return fail('Could not retrieve the controller\'s linked VATSIM ID. Please try again later.');
-      const eligibility = await applySoloEndorsementOverride({ baseEligibility: evaluateBookingEligibility(member, position), cid, member, position, bookingDateNz: getBookingStartNz(date, start) });
+      const eligibility = await applySoloEndorsementOverride({ baseEligibility: evaluateBookingEligibility(member, position), cid, member, position, bookingDateNz: window.startNz });
       if (!eligibility.allowed) return fail(eligibility.reason);
 
       const isCtr = position.endsWith('_CTR') && position !== 'NZAA-R_CTR';
@@ -108,15 +111,8 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
       if (requested.length && !isCtr) return fail('Extra sectors can only be selected for an extendable CTR booking. Clear the extra sectors field for this position.');
       if (requested.some(s => !allExtendableSectors.includes(s) || s === position)) return fail('Use extra sector codes OCR, BAY, OHA, KAI, NAK or STH (or their full callsigns), excluding the booked position.');
       const extendedSectors = isCtr ? [...new Set([...(autoInheritanceMap[position] || []), ...requested])] : [];
-      // Keep the stored year when editing the same NZ date, including sessions
-      // already in progress. Resolve a changed date using the booking convention
-      // of its next occurrence, then anchor both ends to that same year.
-      const year = (date === before.date && getBookingDisplayInterval(before)?.startNz.year)
-        || DateTime.fromISO(convertToUTC(date, start)).setZone(NZ_ZONE).year;
-      const startNz = buildNzDateTime(date, start, year);
-      const endNz = buildNzDateTime(date, end, year);
-      if (!startNz || !endNz || endNz <= startNz) return fail('The selected date and time window is invalid.');
-      const candidate = { ...before, position, date, start: Number(start), end: Number(end), startUtc: startNz.toUTC().toISO(), endUtc: endNz.toUTC().toISO(), extendedSectors };
+      const { startNz, endNz, startUtc, endUtc } = window;
+      const candidate = { ...before, position, date, start: Number(start), end: Number(end), startUtc, endUtc, extendedSectors };
 
       // Read again after asynchronous validation; deletion, relocation and mentor
       // actions may have run while directory/endorsement requests were pending.
@@ -154,9 +150,8 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
         { name: 'End', value: formatBookingEndForDiscord(candidate), inline: true },
         { name: 'Controller', value: `<@${session.ownerId}>` }
       ).setThumbnail(member.user.displayAvatarURL());
-      for (const [id, label] of Object.entries(roleMap)) {
-        if (member.roles.cache.has(id)) { embed.setFooter({ text: label }); break; }
-      }
+      const ratingLabel = getControllerRatingLabel(member);
+      if (ratingLabel) embed.setFooter({ text: ratingLabel });
       if (candidate.eventName) embed.addFields({ name: 'Event', value: candidate.eventName });
       if (extendedSectors.length) embed.addFields({ name: 'Extended Sectors', value: extendedSectors.map(s => sectorCodeMap[s] || s).join(', ') });
       if (solo) embed.addFields({ name: 'Solo Endorsement', value: buildSoloNotice(solo) });

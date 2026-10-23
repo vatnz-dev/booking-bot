@@ -62,7 +62,7 @@ STATSIM_ZERO_FALLBACK_YEARS=3
 
 Set `STAFF_ROLE_IDS` to a comma-separated list of the Senior Staff, Ops Staff and Board Member role IDs. A member with any listed role has staff rights for deleting other controllers' bookings, managing event positions and event thread prompts, and toggling StatSim. Event thread prompts mention all configured staff roles. The legacy `STAFF_ROLE_ID` variable still works when `STAFF_ROLE_IDS` is unset or empty. If neither is configured, staff actions are denied.
 
-Set the rating role variables (`S1_ROLE_ID` through `I3_ROLE_ID`) to your server's corresponding controller roles. These control booking eligibility and rating labels on booking embeds. Set `FSS_ROLE_ID` to the role allowed to book FSS positions. Missing rating roles are ignored; a missing FSS role denies FSS bookings. Restart the bot after changing role configuration.
+Set the rating role variables (`S1_ROLE_ID` through `I3_ROLE_ID`) to your server's corresponding controller roles. These control booking eligibility and rating labels on booking embeds. When a controller has multiple rating roles, both use the highest rating in this order: I3, I1, C3, C1, S3, S2, S1. Set `FSS_ROLE_ID` to the role allowed to book FSS positions. Missing rating roles are ignored; a missing FSS role denies FSS bookings. Restart the bot after changing role configuration.
 
 Keep real Discord channel IDs, role IDs, and bot tokens only in your local `.env`. Never commit `.env` or paste real server IDs into this README.
 
@@ -154,7 +154,9 @@ Before upgrading an existing container, stop it and copy its six root JSON files
 - `/closeeventposition` - Staff only; close an event-only position.
 
 Bookings shorter than 30 minutes are rejected.
-Controllers cannot create overlapping bookings, even at different positions or in different event threads. Back-to-back bookings are allowed.
+New bookings must start in the future. Both endpoints use the same NZ calendar date and year. An active booking may still be edited on its existing date, provided its end remains in the future.
+Controllers cannot create overlapping bookings, even at different positions or in different event threads. Main, inherited and optional sectors are checked together; a new booking cannot take coverage from another booking. Back-to-back bookings are allowed.
+Pending mentor tag and approval deadlines are restored after a restart using their original timestamps; overdue deadlines run promptly instead of receiving a fresh grace period.
 Booking reminders are sent by DM `BOOKING_REMINDER_MINUTES` minutes before start unless `BOOKING_REMINDERS_ENABLED=false`.
 StatSim starts enabled unless `STATSIM_ENABLED=false` is set. Runtime changes from `/statsim` are stored in `db/settings.json` and override the env default until changed again.
 Failed requests or unreadable StatSim traffic automatically disable lookups. The bot probes the traffic endpoint on startup and every `STATSIM_HEALTH_CHECK_MINUTES` (default 5), automatically re-enabling lookups after recovery. Valid zero counts are accepted as a healthy response. A staff `/statsim mode:disable` stays disabled until staff enable it again. During an outage, users see: "No StatSim data available at the moment due to server/bot errors."
