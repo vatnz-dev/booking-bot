@@ -1,4 +1,4 @@
-const axios = require('axios');
+const http = require('../utils/http');
 const cheerio = require('cheerio');
 
 const {
@@ -139,8 +139,8 @@ async function fetchSoloEndorsements({ force = false } = {}) {
 
   try {
     const [solo, s1] = await Promise.all([
-      axios.get(SOLO_ENDORSEMENTS_URL, { timeout: 15000 }),
-      axios.get(S1_SOLO_ENDORSEMENTS_URL, { timeout: 15000 })
+      http.get(SOLO_ENDORSEMENTS_URL),
+      http.get(S1_SOLO_ENDORSEMENTS_URL)
     ]);
 
     endorsementCache = {

@@ -1,5 +1,5 @@
 const cheerio = require('cheerio');
-const axios = require('axios');
+const http = require('../utils/http');
 
 const {
   ratingRoleIds,
@@ -62,7 +62,7 @@ async function fetchVatnzPositions({ force = false } = {}) {
   }
 
   try {
-    const { data: html } = await axios.get(VATNZ_POSITIONS_URL, { timeout: 15000 });
+    const { data: html } = await http.get(VATNZ_POSITIONS_URL);
     const positions = parseVatnzPositions(html);
     if (positions.size === 0) throw new Error('VATNZ position table was empty');
 

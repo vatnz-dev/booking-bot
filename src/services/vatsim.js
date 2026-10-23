@@ -1,10 +1,10 @@
-const axios = require('axios');
+const http = require('../utils/http');
 const { log } = require('../utils/log');
 
 async function getVatsimId(discordId) {
   try {
     const url = `https://api.vatsim.net/v2/members/discord/${discordId}`;
-    const response = await axios.get(url);
+    const response = await http.get(url);
 
     if (!response.data || !response.data.user_id) {
       log('warn', 'vatsim_id_not_found', { discordId });

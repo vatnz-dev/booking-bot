@@ -38,6 +38,8 @@ Copy `.env.example` to `.env` in the project root, then fill in your real Discor
 ```env
 DISCORD_TOKEN=your_bot_token_here
 GUILD_ID=your_server_id_here
+BOT_CONTACT_EMAIL=you@example.org
+BOT_CONTACT_URL=https://github.com/vatnz-dev/booking-bot
 CHANNEL_ID=your_booking_channel_id_here
 LOG_CHANNEL_ID=your_staff_log_channel_id_here
 BOT_OWNER_IDS=your_discord_user_id

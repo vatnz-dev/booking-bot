@@ -11,9 +11,12 @@
   const { event, messages, eventclose, eventThreads, endorsementWarnings, settings, dbPaths } = require('./src/data/databases');
   const commandDefinitions = require('./src/commands/definitions');
   const { GUILD_ID } = require('./src/constants');
-  if (!GUILD_ID) {
-    log('error', 'config_missing', { setting: 'GUILD_ID', message: 'GUILD_ID must be set' });
-    process.exit(1);
+  // Required: the server lock, and the contact details every outside request carries.
+  for (const [setting, value] of [['GUILD_ID', GUILD_ID], ['BOT_CONTACT_EMAIL', process.env.BOT_CONTACT_EMAIL], ['BOT_CONTACT_URL', process.env.BOT_CONTACT_URL]]) {
+    if (!String(value || '').trim()) {
+      log('error', 'config_missing', { setting, message: `${setting} must be set` });
+      process.exit(1);
+    }
   }
   if (process.env.STAFF_ROLE_IDS || process.env.STAFF_ROLE_ID) {
     log('warn', 'setting_unused', { setting: 'STAFF_ROLE_IDS', message: 'STAFF_ROLE_IDS is no longer used and grants nothing; use the per-permission settings instead' });

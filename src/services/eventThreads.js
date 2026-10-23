@@ -1,4 +1,4 @@
-const axios = require('axios');
+const http = require('../utils/http');
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -234,7 +234,7 @@ function formatController(ownerId) {
 }
 
 async function fetchVatnzEvents() {
-  const { data } = await axios.get(EVENT_CALENDAR_URL, { timeout: 15000 });
+  const { data } = await http.get(EVENT_CALENDAR_URL);
   return parseVatnzIcsEvents(data);
 }
 

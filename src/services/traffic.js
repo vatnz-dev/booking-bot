@@ -1,5 +1,5 @@
 const cheerio = require('cheerio');
-const axios = require('axios');
+const http = require('../utils/http');
 
 const { settings } = require('../data/databases');
 const { sectorAerodromeMap, sectorCodeMap } = require('../constants');
@@ -54,12 +54,7 @@ async function getTrafficData(icao, date, start = '0000', end = '2359') {
 
 async function fetchStatsimTraffic(icao, fromUtc, toUtc) {
   const url = `${STATSIM_BASE_URL}/events/custom/${encodeURIComponent(fromUtc)}/${encodeURIComponent(toUtc)}/${encodeURIComponent(icao)}`;
-  const { data: html } = await axios.get(url, {
-    timeout: getStatsimTimeoutMs(),
-    headers: {
-      'User-Agent': 'VATNZ-Booking-Bot/1.0 (+https://github.com/vatnz-dev/booking-bot)'
-    }
-  });
+  const { data: html } = await http.get(url, { timeout: getStatsimTimeoutMs() });
 
   return parseStatsimTrafficHtml(html, icao);
 }
