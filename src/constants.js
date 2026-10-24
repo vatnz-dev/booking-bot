@@ -1,7 +1,5 @@
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
-const { parseStaffRoleIds } = require('./utils/permissions');
-// Keep existing single-role deployments working while supporting several staff roles.
-const STAFF_ROLE_IDS = parseStaffRoleIds(process.env.STAFF_ROLE_IDS || process.env.STAFF_ROLE_ID);
+const GUILD_ID = (process.env.GUILD_ID || '').trim();
 const EVENT_NOTIFICATIONS_ROLE_ID = process.env.EVENT_NOTIFICATIONS_ROLE_ID;
 const BOOKING_REMINDERS_ENABLED = String(process.env.BOOKING_REMINDERS_ENABLED || 'true').toLowerCase() !== 'false';
 const EVENT_CALENDAR_URL = process.env.EVENT_CALENDAR_URL || 'https://www.vatnz.net/events/calendar/vatnz-lite.ics';
@@ -27,6 +25,7 @@ const BOOKING_REMINDER_MINUTES = readPositiveNumberEnv('BOOKING_REMINDER_MINUTES
 const MENTOR_TAG_TIMEOUT_MS = 5 * 60 * 1000;
 const MENTOR_APPROVAL_TIMEOUT_MS = 30 * 60 * 1000;
 const FSS_ROLE_ID = (process.env.FSS_ROLE_ID || '').trim();
+const TRAINING_TEAM_ROLE_ID = (process.env.TRAINING_TEAM_ROLE_ID || '').trim();
 const THUMBS_UP = '\u{1F44D}';
 
 const ratingRoleIds = {
@@ -94,7 +93,6 @@ const allExtendableSectors = [
 
 module.exports = {
   LOG_CHANNEL_ID,
-  STAFF_ROLE_IDS,
   EVENT_NOTIFICATIONS_ROLE_ID,
   BOOKING_REMINDERS_ENABLED,
   EVENT_CALENDAR_URL,
@@ -114,6 +112,8 @@ module.exports = {
   MENTOR_TAG_TIMEOUT_MS,
   MENTOR_APPROVAL_TIMEOUT_MS,
   FSS_ROLE_ID,
+  GUILD_ID,
+  TRAINING_TEAM_ROLE_ID,
   THUMBS_UP,
   ratingRoleIds,
   roleMap,

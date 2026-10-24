@@ -39,7 +39,7 @@ function fixture({ others = {}, staff = false, owner = 'owner' } = {}) {
     set: (id, value) => { data[id] = structuredClone(value); calls.push('save'); }
   };
   const dependencies = {
-    messages, event: { get: () => '0/0' }, client: { users: { fetch: async () => ({ send: async payload => calls.push(['owner-dm', payload]) }) } }, isStaffMember: () => staff,
+    messages, event: { get: () => '0/0' }, client: { users: { fetch: async () => ({ send: async payload => calls.push(['owner-dm', payload]) }) } }, access: { can: () => (staff ? 'ok' : 'denied') },
     getBookingChannel: async () => channel,
     fetchBookingMessage: async () => ({ delete: async () => calls.push('delete-old') }),
     sendAuditLog: async entry => audits.push(entry),

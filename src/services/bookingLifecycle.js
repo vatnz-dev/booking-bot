@@ -6,8 +6,11 @@ const {
   MENTOR_TAG_TIMEOUT_MS,
   MENTOR_APPROVAL_TIMEOUT_MS,
   ONE_HOUR_MS,
-  THUMBS_UP
+  THUMBS_UP,
+  TRAINING_TEAM_ROLE_ID
 } = require('../constants');
+const { getMentorRefusal } = require('../utils/permissions');
+const { log, logFailures } = require('../utils/log');
 const {
   DateTime,
   buildNzDateTime,
@@ -78,7 +81,7 @@ function createBookingLifecycle({
 
   function scheduleExtensionSelectionTimeout(ownerId, messageId) {
     clearExtensionSelectionTimer(messageId);
-    const timeout = setTimeout(async () => {
+    const timeout = setTimeout(logFailures('extension_selection_timeout', { messageId }, async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking) return;
       if (!entry.booking.awaitingExtensionSelection) return;
@@ -102,9 +105,9 @@ function createBookingLifecycle({
           content: `You dismissed the extension selection, so it was defaulted to no extra sectors.\n\n${traffic}`
         });
       } catch (err) {
-        console.warn(`\u26A0\uFE0F Could not DM user ${ownerId} with fallback extension stats:`, err?.message || err);
+        log('warn', 'dm_failed', { userId: ownerId, reason: 'extension_fallback', error: err });
       }
-    }, 3 * 60 * 1000);
+    }), 3 * 60 * 1000);
 
     extensionSelectionTimeouts.set(messageId, timeout);
   }
@@ -125,7 +128,7 @@ function createBookingLifecycle({
       const msg = await fetchBookingMessage(removedBooking);
       if (msg) await msg.delete();
     } catch (err) {
-      console.warn(`\u26A0\uFE0F Could not auto-delete booking message ${messageId}:`, err?.message || err);
+      log('warn', 'booking_message_delete_failed', { messageId, reason: 'auto_delete', error: err });
     }
 
     if (dmText) {
@@ -133,7 +136,7 @@ function createBookingLifecycle({
         const user = await client.users.fetch(entry.ownerId);
         await user.send({ content: dmText });
       } catch (err) {
-        console.warn(`\u26A0\uFE0F Could not DM user ${ownerId} about auto-deletion:`, err?.message || err);
+        log('warn', 'dm_failed', { userId: ownerId, reason: 'auto_delete', error: err });
       }
     }
 
@@ -149,7 +152,7 @@ function createBookingLifecycle({
 
   function scheduleMentorTagTimeout(ownerId, messageId, delayMs = MENTOR_TAG_TIMEOUT_MS) {
     clearMentorTimers(messageId);
-    const timeout = setTimeout(async () => {
+    const timeout = setTimeout(logFailures('mentor_tag_timeout', { messageId }, async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking.mentorRequired) return;
       if (entry.booking.mentorId) return;
@@ -160,7 +163,7 @@ function createBookingLifecycle({
         auditAction: 'Mentor Tag Timeout Auto-Delete',
         auditReason: 'Controller did not tag a mentor within 5 minutes'
       });
-    }, Math.max(1000, delayMs));
+    }), Math.max(1000, delayMs));
     mentorTagTimeouts.set(messageId, timeout);
   }
 
@@ -168,7 +171,7 @@ function createBookingLifecycle({
     const existing = mentorApprovalTimeouts.get(messageId);
     if (existing) clearTimeout(existing);
 
-    const timeout = setTimeout(async () => {
+    const timeout = setTimeout(logFailures('mentor_approval_timeout', { messageId }, async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking.mentorRequired) return;
       if (entry.booking.mentorApproved) return;
@@ -179,7 +182,7 @@ function createBookingLifecycle({
         auditAction: 'Mentor Approval Timeout Auto-Delete',
         auditReason: 'Mentor did not approve within 30 minutes'
       });
-    }, Math.max(1000, delayMs));
+    }), Math.max(1000, delayMs));
     mentorApprovalTimeouts.set(messageId, timeout);
   }
 
@@ -242,7 +245,7 @@ function createBookingLifecycle({
         color: '#00AEFF'
       });
     } catch (err) {
-      console.warn(`Could not send booking reminder to ${ownerId}:`, err?.message || err);
+      log('warn', 'booking_reminder_failed', { userId: ownerId, messageId, error: err });
     } finally {
       clearBookingReminderTimer(messageId);
     }
@@ -270,7 +273,7 @@ function createBookingLifecycle({
       }
 
       sendBookingReminder(ownerId, booking.messageId).catch(err => {
-        console.warn('Booking reminder failed:', err?.message || err);
+        log('warn', 'booking_reminder_failed', { messageId: booking.messageId, error: err });
       });
     }, cappedDelayMs);
 
@@ -293,6 +296,44 @@ function createBookingLifecycle({
     }
   }
 
+  // Shared by the mentor's 👍 and the training staff Approve booking command.
+  async function approveMentorBooking(entry, { approverId, mentorValue, auditAction, reason, dmText = null }) {
+    const { booking } = entry;
+    booking.mentorApproved = true;
+    booking.mentorApprovedAt = new Date().toISOString();
+    booking.mentorApprovedBy = approverId;
+    messages.set(entry.ownerId, entry.bookings);
+    clearMentorTimers(booking.messageId);
+
+    const msg = await fetchBookingMessage(booking);
+    const embed = msg?.embeds?.[0];
+    if (embed) {
+      const newEmbed = new EmbedBuilder()
+        .setColor(embed.color)
+        .setTitle(embed.title)
+        .setTimestamp()
+        .setThumbnail(embed.thumbnail?.url)
+        .setFooter(embed.footer?.text ? { text: embed.footer.text } : null);
+      for (const field of embed.fields) {
+        if (field.name !== 'Mentor') newEmbed.addFields({ name: field.name, value: field.value, inline: field.inline });
+      }
+      newEmbed.addFields({ name: 'Mentor', value: mentorValue, inline: false });
+      await msg.edit({ embeds: [newEmbed] });
+      await msg.reactions.removeAll().catch(() => {});
+    }
+
+    if (dmText) {
+      try {
+        const owner = await client.users.fetch(entry.ownerId);
+        await owner.send({ content: dmText });
+      } catch (err) {
+        log('warn', 'dm_failed', { userId: entry.ownerId, reason: 'booking_approved', error: err });
+      }
+    }
+
+    await sendAuditLog({ action: auditAction, actorId: approverId, targetUserId: entry.ownerId, booking, reason, color: '#3BA55D' });
+  }
+
   async function handleMentorApprovalReaction(reaction, user) {
     try {
       if (user.bot) return;
@@ -307,44 +348,29 @@ function createBookingLifecycle({
       if (!booking.mentorRequired || !booking.mentorId || booking.mentorApproved) return;
       if (user.id !== booking.mentorId) return;
 
-      booking.mentorApproved = true;
-      booking.mentorApprovedAt = new Date().toISOString();
-      messages.set(entry.ownerId, entry.bookings);
-
-      const approvalTimer = mentorApprovalTimeouts.get(messageId);
-      if (approvalTimer) {
-        clearTimeout(approvalTimer);
-        mentorApprovalTimeouts.delete(messageId);
+      // Re-check at approval time: the mentor may have lost the training role since being tagged.
+      const mentorMember = await reaction.message.guild?.members.fetch(user.id).catch(() => null);
+      const refusal = getMentorRefusal(mentorMember, entry.ownerId, TRAINING_TEAM_ROLE_ID);
+      if (refusal) {
+        await sendAuditLog({
+          action: 'Mentor Approval Refused',
+          actorId: user.id,
+          targetUserId: entry.ownerId,
+          booking,
+          reason: refusal,
+          color: '#D9534F'
+        });
+        return;
       }
 
-      const msg = await fetchBookingMessage(booking);
-      if (!msg) return;
-      const embed = msg.embeds[0];
-      const newEmbed = new EmbedBuilder()
-        .setColor(embed.color)
-        .setTitle(embed.title)
-        .setTimestamp()
-        .setThumbnail(embed.thumbnail?.url)
-        .setFooter(embed.footer?.text ? { text: embed.footer.text } : null);
-
-      for (const field of embed.fields) {
-        if (field.name !== 'Mentor') {
-          newEmbed.addFields({ name: field.name, value: field.value, inline: field.inline });
-        }
-      }
-      newEmbed.addFields({ name: 'Mentor', value: `<@${booking.mentorId}> \u2705 Approved`, inline: false });
-      await msg.edit({ embeds: [newEmbed] });
-      await msg.reactions.removeAll().catch(() => {});
-      await sendAuditLog({
-        action: 'Mentor Approved Booking',
-        actorId: user.id,
-        targetUserId: entry.ownerId,
-        booking,
-        reason: 'Mentor reacted with approval',
-        color: '#3BA55D'
+      await approveMentorBooking(entry, {
+        approverId: user.id,
+        mentorValue: `<@${booking.mentorId}> \u2705 Approved`,
+        auditAction: 'Mentor Approved Booking',
+        reason: 'Mentor reacted with approval'
       });
     } catch (err) {
-      console.warn('\u26A0\uFE0F Failed to process mentor approval reaction:', err?.message || err);
+      log('warn', 'mentor_approval_reaction_failed', { error: err });
     }
   }
 
@@ -390,7 +416,7 @@ function createBookingLifecycle({
           const msg = await fetchBookingMessage(booking);
           if (msg) await msg.delete();
         } catch (err) {
-          console.warn(`Could not delete expired booking message ${booking.messageId}:`, err?.message || err);
+          log('warn', 'booking_message_delete_failed', { messageId: booking.messageId, reason: 'expired', error: err });
         }
 
         await sendAuditLog({
@@ -414,9 +440,9 @@ function createBookingLifecycle({
   function startBookingCleanupScheduler() {
     if (bookingCleanupInterval) return;
     rescheduleAllBookingReminders();
-    cleanupExpiredBookings().catch(err => console.warn('Booking cleanup failed:', err?.message || err));
+    cleanupExpiredBookings().catch(err => log('warn', 'booking_cleanup_failed', { error: err }));
     bookingCleanupInterval = setInterval(() => {
-      cleanupExpiredBookings().catch(err => console.warn('Booking cleanup failed:', err?.message || err));
+      cleanupExpiredBookings().catch(err => log('warn', 'booking_cleanup_failed', { error: err }));
     }, ONE_HOUR_MS);
   }
 
@@ -435,6 +461,7 @@ function createBookingLifecycle({
     rescheduleBookingReminder,
     rescheduleAllBookingReminders,
     handleMentorApprovalReaction,
+    approveMentorBooking,
     getBookingEndForCleanup,
     cleanupExpiredBookings,
     startBookingCleanupScheduler

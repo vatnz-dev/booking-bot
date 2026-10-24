@@ -1,4 +1,4 @@
-const axios = require('axios');
+const http = require('../utils/http');
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -14,11 +14,12 @@ const {
   EVENT_NOTIFICATION_LEAD_MS,
   EVENT_NOTIFICATIONS_ROLE_ID,
   LOG_CHANNEL_ID,
-  STAFF_ROLE_IDS,
   THUMBS_UP,
   sectorCodeMap
 } = require('../constants');
-const { cleanEmbedValue, summarizeError } = require('../utils/format');
+const { cleanEmbedValue } = require('../utils/format');
+const { REFUSALS } = require('./access');
+const { log } = require('../utils/log');
 const {
   DateTime,
   bookingOverlapsEvent,
@@ -233,7 +234,7 @@ function formatController(ownerId) {
 }
 
 async function fetchVatnzEvents() {
-  const { data } = await axios.get(EVENT_CALENDAR_URL, { timeout: 15000 });
+  const { data } = await http.get(EVENT_CALENDAR_URL);
   return parseVatnzIcsEvents(data);
 }
 
@@ -250,7 +251,7 @@ function createEventThreadService({
   clearBookingReminderTimer = () => {},
   rescheduleMentorTimers,
   scheduleBookingReminder = () => {},
-  isStaffMember
+  access
 }) {
   let eventThreadCheckInterval = null;
 
@@ -306,7 +307,7 @@ function createEventThreadService({
     try {
       await thread.setName(desiredName, `VATNZ event title update for ${eventData.title}`);
     } catch (err) {
-      console.warn(`Could not update event thread name ${thread.id}:`, err?.message || err);
+      log('warn', 'event_thread_rename_failed', { threadId: thread.id, error: err });
     }
   }
 
@@ -319,7 +320,7 @@ function createEventThreadService({
       const promptMessage = await channel.messages.fetch(state.promptMessageId);
       await promptMessage.edit({ content, components: [] });
     } catch (err) {
-      console.warn(`Could not update event prompt ${state.promptMessageId}:`, err?.message || err);
+      log('warn', 'event_prompt_update_failed', { messageId: state.promptMessageId, error: err });
     }
   }
 
@@ -342,7 +343,7 @@ function createEventThreadService({
     );
 
     const promptMessage = await logChannel.send({
-      content: [...STAFF_ROLE_IDS.map(id => `<@&${id}>`), 'Event thread check required.'].join(' '),
+      content: [...access.mentions('event-prompt'), 'Event thread check required.'].join(' '),
       embeds: [buildEventEmbed(eventData, 'Create Event Thread?')],
       components: [row]
     });
@@ -517,7 +518,7 @@ function createEventThreadService({
         updatedState.notificationDeletedAt = new Date().toISOString();
       }
       setEventThreadState(state.event.uid, updatedState);
-      console.warn(`Could not update event coverage notification ${state.notificationMessageId}:`, err?.message || err);
+      log('warn', 'event_coverage_update_failed', { messageId: state.notificationMessageId, error: err });
       return false;
     }
   }
@@ -573,7 +574,7 @@ function createEventThreadService({
         await message.delete();
       } catch (err) {
         if (err?.code !== 10008) {
-          console.warn(`Could not delete event coverage notification ${state.notificationMessageId}:`, err?.message || err);
+          log('warn', 'event_coverage_delete_failed', { messageId: state.notificationMessageId, error: err });
           eventThreads.set(uid, {
             ...retryState,
             notificationDeleteError: err?.message || String(err)
@@ -631,7 +632,7 @@ function createEventThreadService({
 
         if (oldMessage) {
           await oldMessage.delete().catch(err => {
-            console.warn(`Could not delete moved booking message ${oldMessageId}:`, err?.message || err);
+            log('warn', 'booking_message_delete_failed', { messageId: oldMessageId, reason: 'moved_to_thread', error: err });
           });
         }
 
@@ -787,7 +788,7 @@ function createEventThreadService({
           await thread.delete(`VATNZ event finished more than 1 hour ago: ${state.event.title}`);
           deleted = true;
         } catch (err) {
-          console.warn(`Could not delete finished event thread ${state.threadId}:`, err?.message || err);
+          log('warn', 'event_thread_delete_failed', { threadId: state.threadId, error: err });
           updatedState.status = 'delete_failed';
           updatedState.deleteError = err?.message || String(err);
         }
@@ -814,8 +815,10 @@ function createEventThreadService({
   }
 
   async function handleEventThreadButton(interaction) {
-    if (!isStaffMember(interaction.member)) {
-      await interaction.reply({ content: 'You do not have permission to manage event threads.', ephemeral: true });
+    const permission = access.can('event-thread', interaction.member);
+    if (permission !== 'ok') {
+      await interaction.reply({ content: REFUSALS[permission], ephemeral: true });
+      await sendAuditLog({ action: 'Action Refused', actorId: interaction.user?.id, reason: REFUSALS[permission], fields: [{ name: 'Action', value: 'event-thread', inline: true }], color: '#D9534F' });
       return;
     }
 
@@ -840,7 +843,7 @@ function createEventThreadService({
         const result = await createEventThreadForEvent(eventData, { actorId: interaction.user.id, source: 'staff' });
         await interaction.editReply({ content: `Event thread ready: <#${result.thread.id}>.` });
       } catch (err) {
-        console.error('Could not create event thread:', err);
+        log('error', 'event_thread_create_failed', { error: err });
         await interaction.editReply({ content: 'Could not create the event thread. Check bot permissions and channel access.' });
       }
       return;
@@ -910,9 +913,9 @@ function createEventThreadService({
 
   function startEventThreadScheduler() {
     if (eventThreadCheckInterval) return;
-    checkVatnzEventThreads().catch(err => console.warn(`Event thread check failed: ${summarizeError(err)}`));
+    checkVatnzEventThreads().catch(err => log('warn', 'event_thread_check_failed', { error: err }));
     eventThreadCheckInterval = setInterval(() => {
-      checkVatnzEventThreads().catch(err => console.warn(`Event thread check failed: ${summarizeError(err)}`));
+      checkVatnzEventThreads().catch(err => log('warn', 'event_thread_check_failed', { error: err }));
     }, EVENT_CHECK_INTERVAL_MS);
   }
 
