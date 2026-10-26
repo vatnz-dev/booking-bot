@@ -38,10 +38,13 @@ test('configured rating roles drive tier checks and booking labels without hard-
     return JSON.parse(execFileSync(process.execPath, ['-e', `
       const { ratingRoleIds, roleMap, FSS_ROLE_ID } = require('./src/constants');
       const { getControllerTier } = require('./src/services/positions');
+      const { getControllerRatingLabel } = require('./src/utils/controllerRating');
       const tier = ids => getControllerTier({ roles: { cache: new Set(ids) } });
       process.stdout.write(JSON.stringify({ ratingRoleIds, roleMap, FSS_ROLE_ID,
         tiers: Object.values(ratingRoleIds).map(id => tier([id])),
-        highestTier: tier(Object.values(ratingRoleIds)), unknownTier: tier(['unknown']) }));
+        highestTier: tier(Object.values(ratingRoleIds)), unknownTier: tier(['unknown']),
+        mixedLabels: [['S1', 'I1'], ['S1', 'S2'], ['S2', 'S3'], ['S3', 'C1'], ['C1', 'C3'], ['C3', 'I1'], ['I1', 'I3']].map(ratings => getControllerRatingLabel({ roles: { cache: new Set(ratings.map(rating => ratingRoleIds[rating])) } })),
+        unknownLabel: getControllerRatingLabel({ roles: { cache: new Set(['unknown']) } }) }));
     `], { cwd: require('node:path').resolve(__dirname, '..'), encoding: 'utf8',
       env: { ...process.env, FSS_ROLE_ID: configured ? ' fss-custom ' : '',
         ...Object.fromEntries(ratings.map(rating => [`${rating}_ROLE_ID`, configured ? ` ${rating}-custom ` : ''])) } }));
@@ -51,6 +54,8 @@ test('configured rating roles drive tier checks and booking labels without hard-
   assert.deepEqual(configured.tiers, ratings);
   assert.equal(configured.highestTier, 'I3');
   assert.equal(configured.unknownTier, 'UNRATED');
+  assert.deepEqual(configured.mixedLabels, ['I1 - Instructor', 'S2 - Aerodrome Controller', 'S3 - Terminal Controller', 'C1 - Enroute Controller', 'C3 - Senior Controller', 'I1 - Instructor', 'I3 - Senior Instructor']);
+  assert.equal(configured.unknownLabel, null);
   for (const rating of ratings) {
     assert.equal(configured.ratingRoleIds[rating], `${rating}-custom`);
     assert.ok(configured.roleMap[`${rating}-custom`].startsWith(`${rating} - `));
@@ -59,4 +64,5 @@ test('configured rating roles drive tier checks and booking labels without hard-
   assert.equal(empty.FSS_ROLE_ID, '');
   assert.deepEqual(empty.roleMap, {});
   assert.deepEqual(empty.tiers, ratings.map(() => 'UNRATED'));
+  assert.deepEqual(empty.mixedLabels, Array(7).fill(null));
 });
