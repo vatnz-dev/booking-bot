@@ -73,21 +73,23 @@ function parseApprovedSoloEndorsements(html) {
   findEndorsementTables($, ['CID', 'Position', 'End Date'], SOLO_ENDORSEMENTS_URL).each((_, table) => {
     const category = getTableHeading($, table);
     $(table).find('tr').slice(1).each((__, row) => {
-      const cells = $(row).find('td').map((___, cell) => normalizeText($(cell).text())).get();
+      const tds = $(row).find('td');
+      const cells = tds.map((___, cell) => normalizeText($(cell).text())).get();
       if (cells.length < 6 || cells.every(cell => !cell)) return;
 
-      const [name, cid, position, startDate, endDate, approvedBy] = cells;
+      const [name, cid, , startDate, endDate, approvedBy] = cells;
+      const positions = cellList($, tds[2]);
       const startDateNz = parseNzDate(startDate);
       const endDateNz = parseNzDate(endDate);
-      if (!cid || !position || !endDateNz) return;
+      if (!cid || positions.length === 0 || !endDateNz) return;
 
       endorsements.push({
         source: 'solo',
         category,
         name,
         cid: String(cid),
-        position: position.toUpperCase(),
-        positions: [position.toUpperCase()],
+        position: positions.join(', '),
+        positions,
         locations: [],
         startDate,
         endDate,
@@ -103,10 +105,16 @@ function parseApprovedSoloEndorsements(html) {
 }
 
 function splitList(value) {
-  return normalizeText(value)
-    .split(',')
-    .map(part => part.trim().toUpperCase())
-    .filter(Boolean);
+  // Codes never contain spaces; the live S1 page separates them with spaces ("DEL GND TWR").
+  return String(value || '').split(/[\s,]+/).map(part => part.toUpperCase()).filter(Boolean);
+}
+
+// A cell can hold one value per <p> or <br>; .text() would join them with no separator.
+function cellList($, cell) {
+  const $cell = $(cell).clone();
+  $cell.find('br').replaceWith(',');
+  $cell.find('p, div, li').after(',');
+  return splitList($cell.text());
 }
 
 function parseS1SoloEndorsements(html) {
@@ -115,14 +123,15 @@ function parseS1SoloEndorsements(html) {
 
   findEndorsementTables($, ['CID', 'Location(s)', 'Position(s)', 'Expiry Date'], S1_SOLO_ENDORSEMENTS_URL).each((_, table) => {
     $(table).find('tr').slice(1).each((__, row) => {
-      const cells = $(row).find('td').map((___, cell) => normalizeText($(cell).text())).get();
+      const tds = $(row).find('td');
+      const cells = tds.map((___, cell) => normalizeText($(cell).text())).get();
       if (cells.length < 7 || cells.every(cell => !cell)) return;
 
-      const [name, cid, locationsRaw, positionsRaw, approvedBy, issueDate, expiryDate] = cells;
+      const [name, cid, , , approvedBy, issueDate, expiryDate] = cells;
       const startDateNz = parseNzDate(issueDate);
       const endDateNz = parseNzDate(expiryDate);
-      const locations = splitList(locationsRaw);
-      const suffixes = splitList(positionsRaw);
+      const locations = cellList($, tds[2]);
+      const suffixes = cellList($, tds[3]);
       if (!cid || locations.length === 0 || suffixes.length === 0 || !endDateNz) return;
 
       endorsements.push({

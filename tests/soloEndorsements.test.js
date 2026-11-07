@@ -1,4 +1,5 @@
 const { test } = require('node:test');
+process.env.S1_ROLE_ID = 's1-role';
 const assert = require('node:assert/strict');
 
 let pages;
@@ -7,7 +8,7 @@ require.cache[require.resolve('../src/utils/http')] = {
   loaded: true,
   exports: { get: async url => { requests++; const page = pages(url); if (page instanceof Error) throw page; return { data: page }; } }
 };
-const { fetchSoloEndorsements, parseApprovedSoloEndorsements, applySoloEndorsementOverride, buildOverrideAuditEntry } = require('../src/services/soloEndorsements');
+const { fetchSoloEndorsements, parseApprovedSoloEndorsements, parseS1SoloEndorsements, endorsementMatchesPosition, applySoloEndorsementOverride, buildOverrideAuditEntry } = require('../src/services/soloEndorsements');
 
 const SOLO_HEADER = '<tr><th>Name</th><th>CID</th><th>Position</th><th>Start Date</th><th>End Date</th><th>Approved</th></tr>';
 const S1_HEADER = '<tr><th>Name</th><th>CID</th><th>Location(s)</th><th>Position(s)</th><th>Approved by</th><th>Issue Date</th><th>Expiry Date</th><th>Conditions</th></tr>';
@@ -22,6 +23,26 @@ test('only tables with the endorsement columns are read', () => {
   const parsed = parseApprovedSoloEndorsements(stray + soloPage(samRow));
   assert.deepEqual(parsed.map(e => e.cid), ['1234567']);
   assert.throws(() => parseApprovedSoloEndorsements(stray), /Endorsement table not found/);
+});
+
+test('a cell listing several positions gives one endorsement covering each', () => {
+  // Markup copied from the live solo page: one <p> per position.
+  const row = '<tr><td>Sam</td><td>1234567</td><td><p>NZAA_APP</p><p>NZCH_APP</p></td><td>01/10/2026</td><td>30/11/2027</td><td>Taylor</td></tr>';
+  const [solo] = parseApprovedSoloEndorsements(soloPage(row));
+  assert.deepEqual(solo.positions, ['NZAA_APP', 'NZCH_APP']);
+  assert.ok(endorsementMatchesPosition(solo, 'NZCH_APP'));
+  assert.equal(solo.position, 'NZAA_APP, NZCH_APP');
+
+  const s1Row = '<tr><td>Alex</td><td>7654321</td><td>NZAA<br>NZCH</td><td><p>TWR</p><p>GND, DEL</p></td><td>Taylor</td><td>01/10/2026</td><td>30/11/2027</td><td></td></tr>';
+  const [s1] = parseS1SoloEndorsements(`<table>${S1_HEADER}${s1Row}</table>`);
+  assert.deepEqual(s1.locations, ['NZAA', 'NZCH']);
+  assert.deepEqual(s1.positions, ['TWR', 'GND', 'DEL']);
+
+  // Live S1 markup: plain spaces between positions.
+  const liveS1Row = '<tr><td>Alex</td><td>7654321</td><td>NZAA</td><td>DEL GND TWR</td><td>Taylor</td><td>01/10/2026</td><td>30/11/2027</td><td></td></tr>';
+  const [live] = parseS1SoloEndorsements(`<table>${S1_HEADER}${liveS1Row}</table>`);
+  assert.deepEqual(live.positions, ['DEL', 'GND', 'TWR']);
+  assert.ok(endorsementMatchesPosition(live, 'NZAA_TWR', { roles: { cache: new Set([process.env.S1_ROLE_ID]) } }));
 });
 
 test('cache rules: valid empty list kept 6 h, failure falls back for 24 h then fails closed, no retry for 15 min', async t => {
