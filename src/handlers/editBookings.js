@@ -4,6 +4,7 @@ const { allExtendableSectors, autoInheritanceMap, sectorCodeMap, FSS_ROLE_ID, MI
 const { parseDdMm, parseHhmm, getDurationMinutes, resolveBookingWindow, formatBookingWindowForDiscord, formatBookingDateForDiscord, formatBookingStartForDiscord, formatBookingEndForDiscord } = require('../utils/time');
 const { getControllerRatingLabel } = require('../utils/controllerRating');
 const { cleanEmbedValue } = require('../utils/format');
+const { eventPositionRefusal } = require('../services/eventPositions');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
 const { validateVatnzPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
@@ -100,7 +101,9 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
       if (!window) return fail('Choose a valid future session, or keep an active booking on its current date.');
       const validation = await validateVatnzPosition(position);
       if (!validation.valid) return fail(validation.reason);
-      if (validation.meta.isEvent && event.get(position) !== date) return fail('This event-only position is not open on that date.');
+      const eventRefusal = validation.meta.isEvent && eventPositionRefusal(event, position, window.startNz.toISODate());
+      if (eventRefusal) return fail(eventRefusal);
+      const bookedEventPosition = validation.meta.isEvent && (position !== before.position || date !== before.date);
       const member = session.ownerId === interaction.user.id ? interaction.member : await interaction.guild.members.fetch(session.ownerId);
       if (validation.meta.suffix === 'FSS' && !member.roles.cache.has(FSS_ROLE_ID)) return fail('The controller needs the Oceanic Endorsement for this FSS position.');
       const cid = await getVatsimId(session.ownerId);
@@ -191,7 +194,8 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
         () => refreshEventCoverageNotificationsForBooking(before),
         () => refreshEventCoverageNotificationsForBooking(candidate),
         () => sendAuditLog({ action: 'Booking Edited', actorId: interaction.user.id, targetUserId: session.ownerId, booking: candidate, reason: `Previously ${before.position} ${formatBookingWindowForDiscord(before)}; sectors: ${(before.extendedSectors || []).join(', ') || 'none'}`, color: '#00AEFF' }),
-        ...(solo ? [() => sendAuditLog(buildOverrideAuditEntry(solo, session.ownerId, candidate))] : [])
+        ...(solo ? [() => sendAuditLog(buildOverrideAuditEntry(solo, session.ownerId, candidate))] : []),
+        ...(bookedEventPosition ? [() => sendAuditLog({ action: 'Event Position Booked', actorId: interaction.user.id, targetUserId: session.ownerId, booking: candidate, reason: 'Booking edited onto an event-only position', color: '#00AEFF' })] : [])
       ]) {
         try { await action(); } catch (err) { log('warn', 'edit_notification_failed', { error: err }); }
       }

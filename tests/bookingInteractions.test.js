@@ -85,7 +85,10 @@ for (const action of ['Open', 'Close']) {
 
   test(`${action} event position permits each named user while they hold Board or Senior Staff`, async () => {
     for (const who of [member('events-director', ['board']), member('events-manager', ['senior-staff', 'events-team'])]) {
-      const saved = [];
+      // Close starts with the date open; Open starts with nothing open.
+      const store = initial => { const map = new Map(Object.entries(initial)); return { map, get: k => map.get(k), set: (k, v) => map.set(k, v) }; };
+      const event = store(action === 'Close' ? { 'NZAA-R_CTR': ['2099-10-25'] } : {});
+      const eventclose = store(action === 'Close' ? { 'NZAA-R_CTR': { '2099-10-25': 'message' } } : {});
       const audits = [];
       let posted = 0;
       let deleted = 0;
@@ -96,8 +99,8 @@ for (const action of ['Open', 'Close']) {
       };
       const handlers = createInteractionHandlers({
         access,
-        event: { set: (...args) => saved.push(args) },
-        eventclose: { set: () => {}, get: () => 'message' },
+        event,
+        eventclose,
         getBookingChannel: async () => channel,
         sendAuditLog: async entry => audits.push(entry),
         bookingLifecycle: {}, eventThreadService: {}
@@ -106,15 +109,56 @@ for (const action of ['Open', 'Close']) {
       await handlers[`handle${action}EventPosition`]({
         member: who,
         user: { id: who.id },
-        options: { getString: key => key === 'position' ? 'NZAA-R_CTR' : '25/10' },
+        options: { getString: key => key === 'position' ? 'NZAA-R_CTR' : '25/10/2099' },
         deferReply: async () => {},
         editReply: async payload => { response = payload.content; }
       });
-      assert.deepEqual(saved, [['NZAA-R_CTR', action === 'Open' ? '25/10' : '0/0']]);
-      assert.match(response, action === 'Open' ? /opened!/ : /closed!/);
+      assert.deepEqual(event.map.get('NZAA-R_CTR'), action === 'Open' ? ['2099-10-25'] : []);
+      assert.match(response, action === 'Open' ? /opened for 25 Oct 2099/ : /closed for 25 Oct 2099/);
       assert.equal(audits.length, 1);
       assert.equal(posted, action === 'Open' ? 1 : 0);
       assert.equal(deleted, action === 'Close' ? 1 : 0);
     }
   });
 }
+
+test('a position can be open for several dates, and closing one date keeps the others', async () => {
+  const store = () => { const map = new Map(); return { map, get: k => map.get(k), set: (k, v) => map.set(k, v) }; };
+  const event = store();
+  const eventclose = store();
+  const deleted = [];
+  let posts = 0;
+  const audits = [];
+  const handlers = createInteractionHandlers({
+    access, event, eventclose,
+    getBookingChannel: async () => ({
+      id: 'channel',
+      send: async () => ({ id: `post-${++posts}`, guild: { id: 'guild' } }),
+      messages: { fetch: async id => ({ delete: async () => deleted.push(id) }) }
+    }),
+    sendAuditLog: async entry => audits.push(entry),
+    bookingLifecycle: {}, eventThreadService: {}
+  });
+  const run = async (action, date) => {
+    let response;
+    await handlers[`handle${action}EventPosition`]({
+      member: member('events-director', ['board']), user: { id: 'events-director' },
+      options: { getString: key => (key === 'position' ? 'NZAA_DEP' : date) },
+      deferReply: async () => {}, editReply: async payload => { response = payload.content; }
+    });
+    return response;
+  };
+
+  await run('Open', '15/11/2099');
+  await run('Open', '29/11/2099');
+  assert.match(await run('Open', '29/11/2099'), /already open on 29 Nov 2099/);
+  assert.deepEqual(event.map.get('NZAA_DEP'), ['2099-11-15', '2099-11-29']);
+  assert.equal(posts, 2);
+
+  assert.match(await run('Close', '15/11'), /closed for 15 Nov 2099/);
+  assert.deepEqual(event.map.get('NZAA_DEP'), ['2099-11-29']);
+  assert.deepEqual(eventclose.map.get('NZAA_DEP'), { '2099-11-29': 'post-2' });
+  assert.deepEqual(deleted, ['post-1']);
+  assert.match(await run('Close', '01/12'), /isn't open on 01\/12/);
+  assert.deepEqual(audits.map(a => a.action), ['Event Position Opened', 'Event Position Opened', 'Event Position Closed']);
+});

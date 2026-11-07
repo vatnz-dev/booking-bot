@@ -223,8 +223,10 @@ Before upgrading an existing container, stop it and copy its six root JSON files
 - `/mentor mentor:@user` - Tag a mentor for a booking.
 - `/expectedtraffic position:NZCH_APP date:DD/MM start:HHMM end:HHMM` - Show expected previous-week traffic for the same NZ date/time window.
 - `/statsim mode:status|enable|disable reason:optional` - Staff only; toggle StatSim traffic lookups.
-- `/openeventposition` - Staff only; open an event-only position for a date.
-- `/closeeventposition` - Staff only; close an event-only position.
+- `/openeventposition position date` - `event-position` permission only; open an event-only position for a date. `DD/MM` means this year; use `DD/MM/YYYY` for another year. Impossible and past dates are refused. A position can be open for several dates, each with its own announcement in the booking channel.
+- `/closeeventposition position date:optional` - `event-position` permission only; close one date (`DD/MM` matches that day in any open year), or every date if none is given. Existing bookings are kept.
+
+Event-only positions close automatically the day after each open date (NZ time), and the announcement is deleted. Bookings must match an open date, year included. Every booking of an event-only position is audited as "Event Position Booked".
 
 Bookings shorter than 30 minutes are rejected.
 New bookings must start in the future. Both endpoints use the same NZ calendar date and year. An active booking may still be edited on its existing date, provided its end remains in the future.

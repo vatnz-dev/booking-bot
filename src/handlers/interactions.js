@@ -52,6 +52,7 @@ const {
 } = require('../services/traffic');
 const { validateVatnzPosition, validateVatnzEventPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
+const { formatOpenDate, describeOpenDates, readPosition, writePosition, parseOpenDate, matchOpenDates, eventPositionRefusal, deleteAnnouncement } = require('../services/eventPositions');
 // const { sendBooking, deleteVatsimBooking } = require('../services/vatsim');
 const {
   applySoloEndorsementOverride,
@@ -547,15 +548,8 @@ function createInteractionHandlers({
       }
       const positionMeta = positionValidation.meta;
 
-      if (positionMeta.isEvent) {
-        const unlockedDate = event.get(pos);
-        if (!unlockedDate || unlockedDate === '0/0') {
-          return i.editReply({ content: '\u274C This event-only position is not open for bookings right now.', ephemeral: true });
-        }
-        if (unlockedDate !== date) {
-          return i.editReply({ content: `\u274C This event-only position is only open for ${unlockedDate}.`, ephemeral: true });
-        }
-      }
+      const eventRefusal = positionMeta.isEvent && eventPositionRefusal(event, pos, window.startNz.toISODate());
+      if (eventRefusal) return i.editReply({ content: `\u274C ${eventRefusal}`, ephemeral: true });
 
       if (positionMeta.suffix === 'FSS' && !member.roles.cache.has(FSS_ROLE_ID)) {
         return i.editReply({ content: '\u274C You do not have the Oceanic Endorsement required to book this FSS position.', ephemeral: true });
@@ -700,6 +694,7 @@ function createInteractionHandlers({
         color: '#00AEFF'
       });
       if (soloEndorsement) await sendAuditLog(buildOverrideAuditEntry(soloEndorsement, userId, createdBooking));
+      if (positionMeta.isEvent) await sendAuditLog({ action: 'Event Position Booked', actorId: userId, targetUserId: userId, booking: createdBooking, color: '#00AEFF' });
 
       const prevDate = getPreviousWeekNZ(date, String(start).padStart(4, '0'));
       if (mentorRequired) {
@@ -894,12 +889,12 @@ function createInteractionHandlers({
     await interaction.deferReply({ ephemeral: true });
 
     const position = interaction.options.getString('position').trim().toUpperCase();
-    const date = interaction.options.getString('date');
-
-    if (!/^\d{2}\/\d{2}$/.test(date)) {
-      await interaction.editReply({ content: 'Date must be in the format DD/MM (e.g., 25/06). Please correct it.' });
+    const parsed = parseOpenDate(interaction.options.getString('date'));
+    if (parsed.error) {
+      await interaction.editReply({ content: parsed.error });
       return;
     }
+    const date = formatOpenDate(parsed.iso);
 
     const positionValidation = await validateVatnzEventPosition(position);
     if (!positionValidation.valid) {
@@ -907,7 +902,11 @@ function createInteractionHandlers({
       return;
     }
 
-    event.set(position, date);
+    const state = readPosition({ event, eventclose }, position);
+    if (state.dates.includes(parsed.iso)) {
+      await interaction.editReply({ content: `${position} is already open on ${date}.` });
+      return;
+    }
 
     const embed = {
       color: 0x000000,
@@ -925,7 +924,10 @@ function createInteractionHandlers({
     }
     const sentMessage = await channel.send({ embeds: [embed] });
 
-    eventclose.set(position, sentMessage.id);
+    writePosition({ event, eventclose }, position, {
+      dates: [...state.dates, parsed.iso],
+      messages: { ...state.messages, [parsed.iso]: sentMessage.id }
+    });
     await sendAuditLog({
       action: 'Event Position Opened',
       actorId: interaction.user.id,
@@ -937,7 +939,7 @@ function createInteractionHandlers({
       color: '#00AEFF'
     });
 
-    await interaction.editReply({ content: `${position} opened!` });
+    await interaction.editReply({ content: `${position} opened for ${date}.` });
   }
 
   async function handleExtendSectorSelect(interaction) {
@@ -1085,23 +1087,25 @@ function createInteractionHandlers({
       return;
     }
 
-    event.set(position, '0/0');
-    const bookingChannel = await getBookingChannel();
-    const closeMessageId = eventclose.get(position);
-    if (bookingChannel?.messages && closeMessageId) {
-      try {
-        const s4dmessage = await bookingChannel.messages.fetch(closeMessageId);
-        await s4dmessage.delete();
-      } catch (err) {
-        log('warn', 'event_close_message_delete_failed', { messageId: closeMessageId, error: err });
-      }
+    // No date closes every open date; a date closes just that one.
+    const dateInput = interaction.options.getString('date');
+    const state = readPosition({ event, eventclose }, position);
+    const closing = dateInput ? matchOpenDates(state.dates, dateInput) : state.dates;
+    if (dateInput && !closing.length) {
+      await interaction.editReply({ content: `${position} isn't open on ${dateInput}.` });
+      return;
     }
-    await interaction.editReply({ content: `${position} closed!`, components: [] });
+
+    writePosition({ event, eventclose }, position, { ...state, dates: state.dates.filter(date => !closing.includes(date)) });
+    for (const date of closing) await deleteAnnouncement(getBookingChannel, state.messages[date]);
+    const closed = closing.length ? describeOpenDates(closing) : 'no open dates';
+    await interaction.editReply({ content: `${position} closed for ${closed}.`, components: [] });
     await sendAuditLog({
       action: 'Event Position Closed',
       actorId: interaction.user.id,
       fields: [
-        { name: 'Position', value: position, inline: true }
+        { name: 'Position', value: position, inline: true },
+        { name: 'Dates', value: closed, inline: true }
       ],
       color: '#D9534F'
     });

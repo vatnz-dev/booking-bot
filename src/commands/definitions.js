@@ -115,7 +115,7 @@ module.exports = [
       {
         type: 3,
         name: 'date',
-        description: 'What date do you want to open? Format: DD/MM',
+        description: 'Date to open: DD/MM (this year) or DD/MM/YYYY',
         required: true
       }
     ]
@@ -130,6 +130,12 @@ module.exports = [
         description: 'What position do you want to close?',
         required: true,
         choices: eventPositionChoices
+      },
+      {
+        type: 3,
+        name: 'date',
+        description: 'Date to close: DD/MM or DD/MM/YYYY. Leave out to close every date.',
+        required: false
       }
     ]
   },

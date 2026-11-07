@@ -190,7 +190,8 @@ test('event-only position checks and routing are refreshed', async () => {
   const f = fixture(); await f.open();
   validation.meta.isEvent = true;
   await f.submit(); assert.equal(f.posts.length, 0);
-  f.dependencies.event.get = () => date;
+  assert.match(f.replies.at(-1).content, /not open for bookings right now/);
+  f.dependencies.event.get = () => [DateTime.now().setZone(NZ_ZONE).plus({ days: 7 }).toISODate()];
   const thread = { ...f.channel, id: 'event-thread' };
   f.dependencies.eventThreadService.findMatchingEventThreadForBooking = async () => ({ thread, state: { event: { title: 'Test Event', uid: 'event-uid' } } });
   // Factories capture the service functions, so recreate handlers and picker.
@@ -202,6 +203,9 @@ test('event-only position checks and routing are refreshed', async () => {
   await f.handlers.handleEditBookingSubmit(f.interaction);
   assert.equal(f.data.owner[0].threadId, 'event-thread');
   assert.equal(f.data.owner[0].eventName, 'Test Event');
+  const booked = f.audits.find(a => a.action === 'Event Position Booked');
+  assert.equal(booked.targetUserId, 'owner');
+  assert.equal(booked.booking.position, 'NZAA_TWR');
 });
 
 test('failed Discord send preserves original booking and releases mutation queue', async () => {

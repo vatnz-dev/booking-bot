@@ -51,13 +51,15 @@ function registerReadyHandlers({
   getVatnzEventPositions,
   startBookingCleanupScheduler,
   startEventThreadScheduler,
-  startEndorsementWarningScheduler
+  startEndorsementWarningScheduler,
+  startEventPositionScheduler
 }) {
   client.once('clientReady', () => {
     log('info', 'ready', { botTag: client.user.tag });
     startBookingCleanupScheduler();
     startEventThreadScheduler();
     startEndorsementWarningScheduler?.();
+    startEventPositionScheduler?.();
     startStatsimHealthScheduler?.();
   });
 
@@ -69,7 +71,7 @@ function registerReadyHandlers({
     const managedEventPositions = await getVatnzEventPositions();
     for (const position of managedEventPositions) {
       if (event.get(position) === undefined) {
-        event.set(position, '0/0');
+        event.set(position, []);
       }
     }
 

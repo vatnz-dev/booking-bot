@@ -32,6 +32,7 @@
   const { createInteractionHandlers } = require('./src/handlers/interactions');
   const { registerReadyHandlers, registerGuildLock } = require('./src/handlers/ready');
   const { startStatsimHealthScheduler } = require('./src/services/traffic');
+  const { startEventPositionScheduler } = require('./src/services/eventPositions');
 
   dns.setDefaultResultOrder?.('ipv4first');
 
@@ -153,7 +154,8 @@
     getVatnzEventPositions,
     startBookingCleanupScheduler: bookingLifecycle.startBookingCleanupScheduler,
     startEventThreadScheduler: eventThreadService.startEventThreadScheduler,
-    startEndorsementWarningScheduler: endorsementWarningService.startEndorsementWarningScheduler
+    startEndorsementWarningScheduler: endorsementWarningService.startEndorsementWarningScheduler,
+    startEventPositionScheduler: () => startEventPositionScheduler({ event, eventclose, getBookingChannel: discordHelpers.getBookingChannel, sendAuditLog })
   });
 
   interactionHandlers.registerInteractionHandlers();
