@@ -3,6 +3,7 @@ const { ActionRowBuilder, EmbedBuilder, ModalBuilder, StringSelectMenuBuilder, T
 const { allExtendableSectors, autoInheritanceMap, sectorCodeMap, FSS_ROLE_ID, MIN_BOOKING_DURATION_MINUTES } = require('../constants');
 const { parseDdMm, parseHhmm, getDurationMinutes, resolveBookingWindow, formatBookingWindowForDiscord, formatBookingDateForDiscord, formatBookingStartForDiscord, formatBookingEndForDiscord } = require('../utils/time');
 const { getControllerRatingLabel } = require('../utils/controllerRating');
+const { cleanEmbedValue } = require('../utils/format');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
 const { validateVatnzPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
@@ -154,7 +155,7 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
       ).setThumbnail(member.user.displayAvatarURL());
       const ratingLabel = getControllerRatingLabel(member);
       if (ratingLabel) embed.setFooter({ text: ratingLabel });
-      if (candidate.eventName) embed.addFields({ name: 'Event', value: candidate.eventName });
+      if (candidate.eventName) embed.addFields({ name: 'Event', value: cleanEmbedValue(candidate.eventName) });
       if (extendedSectors.length) embed.addFields({ name: 'Extended Sectors', value: extendedSectors.map(s => sectorCodeMap[s] || s).join(', ') });
       if (solo) embed.addFields({ name: 'Solo Endorsement', value: buildSoloNotice(solo) });
 

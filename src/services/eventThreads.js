@@ -1,3 +1,4 @@
+const { createHash } = require('node:crypto');
 const http = require('../utils/http');
 const {
   ActionRowBuilder,
@@ -76,6 +77,7 @@ function parseVatnzIcsEvents(icsText) {
       continue;
     }
     if (line === 'END:VEVENT') {
+      if (current?.rejectedUrl && !current.url) log('warn', 'event_link_rejected', { uid: current.uid, link: current.rejectedUrl });
       if (current?.uid && current?.title && current?.startUtc?.isValid && current?.endUtc?.isValid) {
         eventsOut.push({
           uid: current.uid,
@@ -103,7 +105,9 @@ function parseVatnzIcsEvents(icsText) {
     if (prop === 'DTSTART') current.startUtc = parseIcsDate(value);
     if (prop === 'DTEND') current.endUtc = parseIcsDate(value);
     if (prop === 'ATTACH' || prop === 'URL') {
-      current.url = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+      const url = safeEventUrl(value);
+      if (url) current.url = url;
+      else current.rejectedUrl = value.slice(0, 200);
     }
     if (prop === 'CATEGORIES') current.categories = value.split(',').map(v => v.trim()).filter(Boolean);
   }
@@ -124,6 +128,24 @@ function compactEventState(eventData) {
 
 function eventStateKey(uid) {
   return Buffer.from(String(uid || 'unknown')).toString('base64url');
+}
+
+// Discord caps button IDs at 100 characters, so buttons carry a short hash of the calendar UID.
+function eventButtonKey(uid) {
+  return createHash('sha256').update(String(uid)).digest('base64url').slice(0, 22);
+}
+
+// Event links go into staff posts as markdown, so only plain https links on vatnz.net are kept.
+// The live feed leaves the scheme off ("www.vatnz.net/events/..."), so a missing scheme becomes https.
+function safeEventUrl(raw) {
+  const value = raw && !/^[a-z][a-z0-9+.-]*:/i.test(raw) ? `https://${raw}` : raw;
+  if (!/^https:\/\/[^\s()[\]<>]+$/i.test(value)) return null;
+  try {
+    const url = new URL(value);
+    return url.hostname === 'vatnz.net' || url.hostname.endsWith('.vatnz.net') ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function formatEventWindow(eventData) {
@@ -210,11 +232,13 @@ function buildEventEmbed(eventData, title = 'VATNZ Event') {
     )
     .setTimestamp();
 
-  if (eventData.url) {
-    embed.addFields({ name: 'Link', value: `[Open event](${eventData.url})`, inline: false });
+  // Checked again here: event state saved before links were validated can still hold one.
+  const url = safeEventUrl(eventData.url);
+  if (url) {
+    embed.addFields({ name: 'Link', value: `[Open event](${url})`, inline: false });
   }
   if (Array.isArray(eventData.categories) && eventData.categories.length > 0) {
-    embed.addFields({ name: 'Categories', value: eventData.categories.join(', '), inline: false });
+    embed.addFields({ name: 'Categories', value: cleanEmbedValue(eventData.categories.join(', ')), inline: false });
   }
   return embed;
 }
@@ -305,7 +329,7 @@ function createEventThreadService({
     if (!thread?.setName || thread.name === desiredName) return;
 
     try {
-      await thread.setName(desiredName, `VATNZ event title update for ${eventData.title}`);
+      await thread.setName(desiredName, `VATNZ event title update for ${String(eventData.title).slice(0, 400)}`);
     } catch (err) {
       log('warn', 'event_thread_rename_failed', { threadId: thread.id, error: err });
     }
@@ -333,11 +357,11 @@ function createEventThreadService({
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`event_thread_create:${eventData.uid}`)
+        .setCustomId(`event_thread_create:${eventButtonKey(eventData.uid)}`)
         .setLabel('Create thread')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
-        .setCustomId(`event_thread_decline:${eventData.uid}`)
+        .setCustomId(`event_thread_decline:${eventButtonKey(eventData.uid)}`)
         .setLabel('Decline')
         .setStyle(ButtonStyle.Secondary)
     );
@@ -413,7 +437,7 @@ function createEventThreadService({
 
     const embed = new EmbedBuilder()
       .setColor('#0057B8')
-      .setTitle(`${eventData.title} Coverage`)
+      .setTitle(`${String(eventData.title).slice(0, 240)} Coverage`)
       .addFields(
         { name: 'Event Starts', value: startValue, inline: false },
         { name: 'Airports With Control', value: cleanEmbedValue(coverage.airports), inline: false },
@@ -421,8 +445,9 @@ function createEventThreadService({
       )
       .setTimestamp();
 
-    if (eventData.url) {
-      embed.addFields({ name: 'Event Link', value: `[Open event](${eventData.url})`, inline: false });
+    const url = safeEventUrl(eventData.url);
+    if (url) {
+      embed.addFields({ name: 'Event Link', value: `[Open event](${url})`, inline: false });
     }
 
     return embed;
@@ -702,7 +727,7 @@ function createEventThreadService({
       name: buildEventThreadName(eventData),
       autoArchiveDuration: 1440,
       type: ChannelType.PublicThread,
-      reason: `VATNZ event thread for ${eventData.title}`
+      reason: `VATNZ event thread for ${String(eventData.title).slice(0, 400)}`
     });
 
     await thread.send({ embeds: [buildEventEmbed(eventData, 'Event Booking Thread')] });
@@ -785,7 +810,7 @@ function createEventThreadService({
       const thread = await fetchDiscordChannel(state.threadId, 'finished event thread');
       if (thread?.delete) {
         try {
-          await thread.delete(`VATNZ event finished more than 1 hour ago: ${state.event.title}`);
+          await thread.delete(`VATNZ event finished more than 1 hour ago: ${String(state.event.title).slice(0, 400)}`);
           deleted = true;
         } catch (err) {
           log('warn', 'event_thread_delete_failed', { threadId: state.threadId, error: err });
@@ -826,10 +851,12 @@ function createEventThreadService({
     const declinePrefix = 'event_thread_decline:';
     const isCreate = interaction.customId.startsWith(createPrefix);
     const isDecline = interaction.customId.startsWith(declinePrefix);
-    const uid = isCreate
+    const key = isCreate
       ? interaction.customId.slice(createPrefix.length)
       : interaction.customId.slice(declinePrefix.length);
-    const state = getEventThreadState(uid);
+    // Prompts posted before button keys were hashed carry the raw UID.
+    const state = eventThreads.all().map(entry => entry.data).find(s => s?.event?.uid && eventButtonKey(s.event.uid) === key)
+      || getEventThreadState(key);
     const eventData = state?.event;
 
     if (!eventData || (!isCreate && !isDecline)) {
@@ -856,7 +883,7 @@ function createEventThreadService({
       declinedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    setEventThreadState(uid, updatedState);
+    setEventThreadState(eventData.uid, updatedState);
     await interaction.message.edit({ components: [] }).catch(() => {});
     await interaction.reply({ content: `Declined event thread for ${eventData.title}.`, ephemeral: true });
     await sendAuditLog({
@@ -880,35 +907,42 @@ function createEventThreadService({
       .sort((a, b) => (getEventDateTimes(a)?.startNz?.toMillis() || 0) - (getEventDateTimes(b)?.startNz?.toMillis() || 0));
 
     for (const eventData of upcoming) {
-      let existing = getEventThreadState(eventData.uid);
-      await postEventCoverageNotification(eventData);
-      existing = getEventThreadState(eventData.uid);
-
-      if (existing?.status === 'created' && existing.threadId) {
-        setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
-        const thread = await fetchDiscordChannel(existing.threadId, 'event thread');
-        if (thread) {
-          await ensureEventThreadName(thread, eventData);
-          await moveBookingsIntoEventThread(eventData, thread);
-        }
-        continue;
+      try {
+        await processUpcomingEvent(eventData);
+      } catch (err) {
+        log('warn', 'calendar_event_skipped', { uid: eventData.uid, title: eventData.title, error: err });
       }
-
-      if (isChristchurchControlEvent(eventData)) {
-        if (existing?.status !== 'created') {
-          await createEventThreadForEvent(eventData, { source: 'auto' });
-        }
-        continue;
-      }
-
-      if (existing?.status === 'declined') continue;
-      if (existing?.status === 'prompted') {
-        setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
-        continue;
-      }
-
-      await postEventThreadPrompt(eventData);
     }
+  }
+
+  async function processUpcomingEvent(eventData) {
+    await postEventCoverageNotification(eventData);
+    const existing = getEventThreadState(eventData.uid);
+
+    if (existing?.status === 'created' && existing.threadId) {
+      setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
+      const thread = await fetchDiscordChannel(existing.threadId, 'event thread');
+      if (thread) {
+        await ensureEventThreadName(thread, eventData);
+        await moveBookingsIntoEventThread(eventData, thread);
+      }
+      return;
+    }
+
+    if (isChristchurchControlEvent(eventData)) {
+      if (existing?.status !== 'created') {
+        await createEventThreadForEvent(eventData, { source: 'auto' });
+      }
+      return;
+    }
+
+    if (existing?.status === 'declined') return;
+    if (existing?.status === 'prompted') {
+      setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
+      return;
+    }
+
+    await postEventThreadPrompt(eventData);
   }
 
   function startEventThreadScheduler() {
@@ -958,5 +992,7 @@ module.exports = {
   eventTitleIncludesStartDate,
   buildEventThreadName,
   buildEventEmbed,
+  safeEventUrl,
+  eventButtonKey,
   getDiscordTimestamp
 };
