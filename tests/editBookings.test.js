@@ -1,4 +1,6 @@
 const { test } = require('node:test');
+process.env.S1_ROLE_ID = 'student';
+process.env.I1_ROLE_ID = 'instructor';
 const assert = require('node:assert/strict');
 const { DateTime, NZ_ZONE, convertToUTC } = require('../src/utils/time');
 const stub = (path, exports) => { require.cache[require.resolve(path)] = { exports, loaded: true }; };
@@ -247,7 +249,12 @@ test('a new booking racing an edit sees its committed position', async () => {
   assert.match(f.replies.at(-1).content, /already booked/);
 });
 
-test('editing an active booking preserves its year and uses its actual previous week', async () => {
+test('editing an active booking preserves its year and uses its actual previous week', async t => {
+  const { Settings } = require('luxon');
+  const originalNow = Settings.now;
+  const midday = DateTime.now().setZone(NZ_ZONE).set({ hour: 12, minute: 0 }).toMillis();
+  Settings.now = () => midday;
+  t.after(() => { Settings.now = originalNow; });
   const f = fixture();
   const nowNz = DateTime.now().setZone(NZ_ZONE);
   const today = nowNz.toFormat('dd/MM');
@@ -286,4 +293,11 @@ test('notification failures leave a successful saved edit and traffic reply', as
   assert.equal(f.data.owner[0].messageId, 'new-1');
   assert.ok(f.replies.some(p => /Booking updated/.test(p.content)));
   assert.match(f.replies.at(-1).content, /Updated aerodrome traffic/);
+});
+
+test('edited booking embed displays I1 when the controller also holds S1', async () => {
+  const f = fixture();
+  f.interaction.member.roles.cache = new Set(['student', 'instructor']);
+  await f.open(); await f.submit();
+  assert.equal(f.posts[0].embeds[0].toJSON().footer.text, 'I1 - Instructor');
 });
