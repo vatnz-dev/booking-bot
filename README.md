@@ -26,10 +26,62 @@ VATNZ ATC Booking Bot is a Discord bot for controller booking, mentoring workflo
 
 ## Requirements
 
-- Node.js 20 or newer.
+- Node.js 22 (the Docker image uses 22), or Docker.
 - npm, which is bundled with Node.js.
-- A Discord bot token.
-- A Discord server where the bot has permission to manage slash commands, send messages, add reactions, create public threads, and delete its own booking/thread messages.
+- A Discord application and bot token, and a server to add it to. See [First-time setup](#first-time-setup).
+
+## First-time setup
+
+1. **Create the application.** In the [Discord Developer Portal](https://discord.com/developers/applications), create an application and add a bot. Under **Bot**, turn on **Message Content Intent**. Without it, login fails with "Used disallowed intents".
+
+2. **Invite the bot** with the `bot` and `applications.commands` scopes, replacing `<APP_ID>` with the application ID:
+
+   ```text
+   https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot+applications.commands&permissions=326417607744
+   ```
+
+   If the roles the bot pings (`EVENT_PROMPT_ROLE_IDS`, `EVENT_NOTIFICATIONS_ROLE_ID`) aren't set to "Allow anyone to @mention this role", use `permissions=326417738816` instead, which adds Mention @everyone, @here and All Roles.
+
+   | Permission | Why the bot needs it |
+   |---|---|
+   | View Channels | Sees the booking channel, log channel and event threads |
+   | Send Messages | Posts bookings, the booking panel, audit entries and event prompts |
+   | Embed Links | Every post is an embed |
+   | Read Message History | Finds the existing booking panel and the booking posts it edits or deletes |
+   | Add Reactions | Adds 👍 to bookings that need mentor approval |
+   | Manage Messages | Clears the 👍 reactions once a booking is approved |
+   | Create Public Threads | Creates event threads |
+   | Send Messages in Threads | Posts and moves bookings into event threads |
+   | Manage Threads | Renames event threads and deletes them after the event |
+
+   `CHANNEL_ID` must be a normal text channel, since event threads are created under it. Reminder, mentor and endorsement DMs only reach members who allow DMs from server members. If a DM can't be delivered, the bot carries on without it.
+
+3. **Copy the IDs.** In Discord, turn on **User Settings > Advanced > Developer Mode**, then right-click the server, channels, roles and users to copy their IDs. Copy `.env.example` to `.env` and fill them in.
+
+4. **Fill in the required settings.** If any of these is missing, the bot exits and Docker keeps restarting it:
+   - `DISCORD_TOKEN`. Missing or wrong, it logs `login_failed`.
+   - `GUILD_ID`. This and the two below log `config_missing`.
+   - `BOT_CONTACT_EMAIL` and `BOT_CONTACT_URL`. These are sent with every request to VATSIM, StatSim and vatnz.net so those services can reach whoever runs the bot. Use an address someone reads.
+
+5. **Use the right server ID.** The bot only works in `GUILD_ID`. It leaves any other server it's in or is added to. For a test bot, set `GUILD_ID` to your test server. Commands are registered in that server only, and any global commands left by older versions are removed at startup.
+
+6. **Fill in the settings the bot needs to work properly.** The bot starts without these, but:
+   - Without `TRAINING_TEAM_ROLE_ID`, nobody can be tagged as a mentor, so every booking that needs one is deleted.
+   - Without `LOG_CHANNEL_ID`, there are no audit posts. `db/audit.jsonl` still records every entry.
+   - Without `BOT_OWNER_IDS`, nobody can run `/maintenance` or `/statsim`.
+   - Without `BOARD_ROLE_ID` or `SENIOR_STAFF_ROLE_ID`, users named in a permission list never get that permission.
+   - The five permission lists decide who can do what. See the table under [Environment Variables](#environment-variables).
+   - Without the rating role IDs (`S1_ROLE_ID` to `I3_ROLE_ID`), controllers can't book the positions their rating allows. Without `FSS_ROLE_ID`, nobody can book FSS positions.
+
+7. **Start the bot.** See [Docker](#docker): `docker compose pull`, then `docker compose up -d`.
+
+8. **Make the hidden commands available.** `/maintenance` and the **Approve booking** message command (right-click a booking post, then Apps) are hidden by default. In **Server Settings > Integrations**, allow `/maintenance` for the bot owners and Approve booking for the users in `MENTOR_APPROVER_USER_IDS`. The bot still checks permissions itself, so showing a command to someone doesn't give them access. Approve booking asks for a reason, stops the mentor deletion timers, marks the post "Approved by … (training staff)", tells the controller by DM, and records the reason in the audit trail.
+
+9. **Check it's running.** `docker logs vatnz-booking-bot` shows one JSON line per event:
+   - A `startup` line lists the settings in use, with secrets removed.
+   - There's no `config_missing`, `login_failed` or `left_guild` line.
+   - The booking panel appears in `CHANNEL_ID`.
+   - `/maintenance access list` shows the access lists you expect.
 
 ## Environment Variables
 
@@ -82,8 +134,6 @@ Each staff permission has its own list, so a team only gets what its job needs:
 | `mentor-approver` | `MENTOR_APPROVER_USER_IDS` | Approve mentor bookings on a mentor's behalf |
 
 Roles listed in a permission grant it directly. Users listed in a permission only keep it while they hold `BOARD_ROLE_ID` or `SENIOR_STAFF_ROLE_ID`, so access lapses when someone steps down. Bot owners (`BOT_OWNER_IDS`) can run `/statsim` and `/maintenance access add|remove|list`. The first `/maintenance` change to a permission saves its list in `db/settings.json`, and from then on that saved list is used instead of the environment value. Owners can only be changed in the environment. `STAFF_ROLE_IDS` is no longer used.
-
-`/maintenance` and the **Approve booking** message command (right-click a booking post, then Apps) are hidden by default. In Server Settings > Integrations, allow `/maintenance` for the bot owners and Approve booking for the users in `MENTOR_APPROVER_USER_IDS`. The bot still checks permissions itself, so showing a command to someone doesn't give them access. Approve booking asks for a reason, stops the mentor deletion timers, marks the post "Approved by … (training staff)", tells the controller by DM, and records the reason in the audit trail.
 
 Set the rating role variables (`S1_ROLE_ID` through `I3_ROLE_ID`) to your server's corresponding controller roles. These control booking eligibility and rating labels on booking embeds. Set `FSS_ROLE_ID` to the role allowed to book FSS positions. Missing rating roles are ignored; a missing FSS role denies FSS bookings. Restart the bot after changing role configuration.
 
