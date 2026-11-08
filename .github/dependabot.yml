@@ -1,0 +1,30 @@
+# Weekly update pull requests. Commit prefixes follow Conventional Commits so semantic-release
+# publishes a patched image for base-image and runtime-dependency updates, and not for CI or dev tools.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: fix(deps)
+    ignore:
+      # Stay on Node 22 until a move to the next major is planned.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: fix(deps)
+      prefix-development: chore(deps-dev)
+    open-pull-requests-limit: 5
