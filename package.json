@@ -13,7 +13,7 @@
     "axios": "^1.7.0",
     "cheerio": "^1.2.0",
     "discord-sync-commands": "^0.5.2",
-    "discord.js": "^14.25.1",
+    "discord.js": "^14.28.1",
     "dotenv": "^16.0.0",
     "easy-json-database": "^1.0.0",
     "install": "^0.13.0",
