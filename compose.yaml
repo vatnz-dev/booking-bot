@@ -1,6 +1,6 @@
 services:
   booking-bot:
-    image: ghcr.io/vatnz-dev/booking-bot:1
+    image: ghcr.io/vatnz-dev/booking-bot:2
     container_name: vatnz-booking-bot
     restart: unless-stopped
     init: true
