@@ -4,6 +4,7 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    target-branch: next
     schedule:
       interval: weekly
     commit-message:
@@ -11,6 +12,7 @@ updates:
 
   - package-ecosystem: docker
     directory: /
+    target-branch: next
     schedule:
       interval: weekly
     commit-message:
@@ -22,6 +24,7 @@ updates:
 
   - package-ecosystem: npm
     directory: /
+    target-branch: next
     schedule:
       interval: weekly
     commit-message:
