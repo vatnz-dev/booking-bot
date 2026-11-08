@@ -10,3 +10,10 @@ messages.json
 eventthreads.json
 endorsementwarnings.json
 settings.json
+tests
+examples
+.github
+*.md
+compose.yaml
+Dockerfile
+.dockerignore

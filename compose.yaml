@@ -8,6 +8,25 @@ services:
       - .env
     volumes:
       - booking-db:/app/db
+    # Hardening: only /app/db (and a small /tmp) is writable, with no extra privileges.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Limits are read from .env so they can grow with the host. memswap equal to memory means no swap.
+    mem_limit: ${BOT_MEMORY_LIMIT:-512m}
+    memswap_limit: ${BOT_MEMORY_LIMIT:-512m}
+    cpus: ${BOT_CPU_LIMIT:-1.0}
+    pids_limit: ${BOT_PIDS_LIMIT:-100}
+    # About 50 MB of rotated logs at most; db/audit.jsonl is the permanent record.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
 
 volumes:
   booking-db:

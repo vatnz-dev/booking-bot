@@ -199,6 +199,21 @@ docker compose up -d
 
 The Compose file uses the `vatnz-booking-db` named volume for persistent database files. Stop the bot with `docker compose down`; the volume and its data are kept.
 
+### Container security
+
+The Compose file runs the bot with only what it needs:
+
+| Setting | What it does | To relax it |
+|---|---|---|
+| `read_only: true` + `tmpfs: /tmp` | Only `/app/db` and a 16 MB `/tmp` can be written. The app files are owned by root in the image, so the bot can't change its own code. | Remove `read_only` |
+| `cap_drop: ALL`, `no-new-privileges` | No Linux capabilities, and the process (the unprivileged `node` user) can't gain more. | Add back a specific capability with `cap_add` |
+| `mem_limit` / `memswap_limit` | 512 MB by default, with no swap: if the bot hits the cap, Docker restarts it rather than slowing the host. | `BOT_MEMORY_LIMIT=1g` in `.env` |
+| `cpus` | 1 core by default. | `BOT_CPU_LIMIT=2` in `.env` |
+| `pids_limit` | 100 processes by default (Node uses about a dozen). | `BOT_PIDS_LIMIT=200` in `.env` |
+| `logging` | Docker keeps at most 5 × 10 MB of logs; `db/audit.jsonl` is the permanent record. | Change `max-size` / `max-file` |
+
+After changing a limit in `.env`, run `docker compose up -d` to apply it. The base image is pinned to an exact Node and Alpine release in the `Dockerfile` (currently `node:22.23.4-alpine3.24`), so every build is the same; update that line deliberately to pick up Node or Alpine fixes.
+
 To run the image directly instead:
 
 ```bash
@@ -206,12 +221,17 @@ docker pull ghcr.io/vatnz-dev/booking-bot:latest
 docker run -d \
   --name vatnz-booking-bot \
   --restart unless-stopped \
+  --init \
   --env-file .env \
   --mount type=volume,source=vatnz-booking-db,target=/app/db \
+  --read-only --tmpfs /tmp:size=16m \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --memory 512m --memory-swap 512m --cpus 1.0 --pids-limit 100 \
+  --log-opt max-size=10m --log-opt max-file=5 \
   ghcr.io/vatnz-dev/booking-bot:latest
 ```
 
-Fill in `.env` before running the command. All six JSON databases live in `/app/db`; the named volume preserves them across container replacement and image updates. You can instead bind-mount a host directory to `/app/db` if it is writable by the image's `node` user (UID 1000).
+Fill in `.env` before running the command. The six JSON databases and the audit trail (`audit.jsonl`) live in `/app/db`; the named volume preserves them across container replacement and image updates. You can instead bind-mount a host directory to `/app/db` if it is writable by the image's `node` user (UID 1000).
 
 Before upgrading an existing container, stop it and copy its six root JSON files into the volume's root (or the host directory) before starting the new image. Runtime data and `.env` are excluded from the image build. Keep a backup of the old data until the upgraded bot is verified.
 
