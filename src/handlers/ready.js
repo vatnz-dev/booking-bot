@@ -52,7 +52,8 @@ function registerReadyHandlers({
   startBookingCleanupScheduler,
   startEventThreadScheduler,
   startEndorsementWarningScheduler,
-  startEventPositionScheduler
+  startEventPositionScheduler,
+  startHousekeepingScheduler
 }) {
   client.once('clientReady', () => {
     log('info', 'ready', { botTag: client.user.tag });
@@ -60,6 +61,7 @@ function registerReadyHandlers({
     startEventThreadScheduler();
     startEndorsementWarningScheduler?.();
     startEventPositionScheduler?.();
+    startHousekeepingScheduler?.();
     startStatsimHealthScheduler?.();
   });
 

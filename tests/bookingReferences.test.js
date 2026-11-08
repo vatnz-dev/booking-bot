@@ -137,6 +137,30 @@ test('menus page past 25 bookings', async () => {
   assert.match(mentorButtons[1].custom_id, /^mentor_booking_page:morgan:1$/);
 });
 
+test('/editbookings pages past 25 bookings, and a booking on page 2 opens its edit form', async () => {
+  const thirty = Array.from({ length: 30 }, (_, i) => booking(`m-${i}`, 'NZAA_TWR', `${String(i + 1).padStart(2, '0')}/12`));
+  const h = handlers(store({ sam: thirty }));
+  let reply;
+  await h.handleEditBookings({ user: { id: 'sam' }, member: samMember, options: { getUser: () => null }, reply: async payload => { reply = payload; } });
+  const [menu, buttons] = reply.components.map(row => row.toJSON().components);
+  assert.equal(menu[0].options.length, 25);
+  assert.equal(buttons[1].custom_id, 'edit_booking_page:sam:1');
+
+  let update;
+  await h.handleEditBookingPage({ customId: buttons[1].custom_id, user: { id: 'sam' }, member: samMember, update: async payload => { update = payload; } });
+  const [page2] = update.components.map(row => row.toJSON().components);
+  assert.equal(page2[0].options.length, 5);
+  assert.match(page2[0].options[0].label, /^NZAA_TWR on 26\/12 at 1800/);
+
+  let modal;
+  await h.handleEditBookingSelect({ user: { id: 'sam' }, member: samMember, values: [page2[0].options[0].value], showModal: async m => { modal = m.toJSON(); } });
+  assert.match(modal.custom_id, /^edit_booking:/);
+
+  let refused;
+  await h.handleEditBookingPage({ customId: 'edit_booking_page:other:1', user: { id: 'sam' }, member: samMember, reply: async payload => { refused = payload; } });
+  assert.match(refused.content, /only edit your own/);
+});
+
 test('an event-thread move and a user edit to the same booking both survive', async () => {
   const messages = store({ sam: [booking('m-ch', 'NZCH_GND', '14/11', { startUtc: '2099-11-14T05:00:00Z', endUtc: '2099-11-14T07:00:00Z' })] });
   let release;

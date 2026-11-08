@@ -1,7 +1,5 @@
 const {
   ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
   EmbedBuilder,
   ModalBuilder,
   StringSelectMenuBuilder,
@@ -53,6 +51,7 @@ const {
 const { validateVatnzPosition, validateVatnzEventPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
 const { runBookingMutation } = require('../services/bookingQueue');
+const { bookingMenuRows } = require('../utils/bookingMenu');
 const { bookingLimitRefusal, mentorRequestRefusal } = require('../services/limits');
 const { formatOpenDate, describeOpenDates, readPosition, writePosition, parseOpenDate, matchOpenDates, eventPositionRefusal, deleteAnnouncement } = require('../services/eventPositions');
 // const { sendBooking, deleteVatsimBooking } = require('../services/vatsim');
@@ -262,27 +261,7 @@ function createInteractionHandlers({
     });
   }
 
-  // Menus name a booking by its message ID, never its place in the list, and page past Discord's 25 options.
-  function bookingMenuRows({ bookings, page, menuId, pageId, placeholder, value }) {
-    const pages = Math.max(1, Math.ceil(bookings.length / 25));
-    const current = Math.min(Math.max(0, page), pages - 1);
-    const options = bookings.slice(current * 25, current * 25 + 25).map(b => ({
-      label: `${b.position} on ${b.date} at ${b.start}`.slice(0, 100),
-      description: `Ends at ${b.end}`,
-      value: value(b)
-    }));
-    const rows = [new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder().setCustomId(menuId).setPlaceholder(placeholder).addOptions(options)
-    )];
-    if (pages > 1) {
-      rows.push(new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`${pageId}:${current - 1}`).setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(current === 0),
-        new ButtonBuilder().setCustomId(`${pageId}:${current + 1}`).setLabel(`Next (page ${current + 1} of ${pages})`).setStyle(ButtonStyle.Secondary).setDisabled(current === pages - 1)
-      ));
-    }
-    return rows;
-  }
-
+  // Menus name a booking by its message ID, never its place in the list.
   function deleteMenuRows(ownerId, bookings, page) {
     return bookingMenuRows({
       bookings, page, menuId: 'delete_booking_select', pageId: `delete_booking_page:${ownerId}`,
@@ -1461,6 +1440,10 @@ function createInteractionHandlers({
           }
           if (/^(delete|mentor)_booking_page:/.test(interaction.customId)) {
             await handleBookingMenuPage(interaction);
+            return;
+          }
+          if (interaction.customId.startsWith('edit_booking_page:')) {
+            await editHandlers.handleEditBookingPage(interaction);
             return;
           }
 

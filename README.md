@@ -317,6 +317,8 @@ These files are created locally and ignored by git:
 - `db/settings.json`
 - `node_modules/`
 
+Old records are pruned at startup and then daily: event records in `db/eventthreads.json` 30 days after the event ends, and warning records in `db/endorsementwarnings.json` 30 days after the endorsement expires. Each removal is logged (`event_record_pruned`, `endorsement_warning_pruned`); `db/audit.jsonl` keeps the history.
+
 The bot creates `db/` and missing runtime JSON files automatically with empty objects. On a local upgrade, stop the old bot before starting this version: any root-level legacy JSON file is copied into `db/` only if its destination is missing. Original files remain as backups; existing `db/` data always takes precedence. Root-level legacy files remain ignored by git.
 
 Demo versions live in `examples/`:

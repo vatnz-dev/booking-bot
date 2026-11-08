@@ -1,5 +1,6 @@
 const { randomUUID } = require('node:crypto');
-const { ActionRowBuilder, EmbedBuilder, ModalBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { ActionRowBuilder, EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { bookingMenuRows } = require('../utils/bookingMenu');
 const { allExtendableSectors, autoInheritanceMap, sectorCodeMap, FSS_ROLE_ID, MIN_BOOKING_DURATION_MINUTES } = require('../constants');
 const { parseDdMm, parseHhmm, getDurationMinutes, resolveBookingWindow, formatBookingWindowForDiscord, formatBookingDateForDiscord, formatBookingStartForDiscord, formatBookingEndForDiscord } = require('../utils/time');
 const { getControllerRatingLabel } = require('../utils/controllerRating');
@@ -50,15 +51,29 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
     if (!Array.isArray(bookings) || !bookings.length) {
       return interaction.reply({ content: ownerId === interaction.user.id ? 'You have no current bookings.' : `<@${ownerId}> has no current bookings.`, ephemeral: true });
     }
-    const options = bookings.slice(0, 25).map(booking => ({
-      label: `${booking.position} on ${booking.date} at ${String(booking.start).padStart(4, '0')}`.slice(0, 100),
-      description: `Ends at ${String(booking.end).padStart(4, '0')}`,
-      value: remember(interaction.user.id, ownerId, booking)
-    }));
     return interaction.reply({
       content: `Select a booking to edit${ownerId === interaction.user.id ? '' : ` for <@${ownerId}>`}:`, ephemeral: true,
-      components: [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('edit_booking_select').setPlaceholder('Select a booking to edit').addOptions(options))]
+      components: editMenuRows(interaction.user.id, ownerId, bookings, 0)
     });
+  }
+
+  // Edit links (sessions) are made only for the bookings on the page being shown.
+  function editMenuRows(actorId, ownerId, bookings, page) {
+    return bookingMenuRows({
+      bookings, page, menuId: 'edit_booking_select', pageId: `edit_booking_page:${ownerId}`,
+      placeholder: 'Select a booking to edit', value: booking => remember(actorId, ownerId, booking)
+    });
+  }
+
+  async function handleEditBookingPage(interaction) {
+    const [, ownerId, page] = interaction.customId.split(':');
+    if (ownerId !== interaction.user.id && !isBookingModerator(interaction.member)) {
+      await interaction.reply({ content: 'You can only edit your own bookings.', ephemeral: true });
+      return sendAuditLog({ action: 'Action Refused', actorId: interaction.user.id, targetUserId: ownerId, reason: 'Tried to page another controller\'s bookings for editing', color: '#D9534F' });
+    }
+    const bookings = messages.get(ownerId);
+    if (!Array.isArray(bookings) || !bookings.length) return interaction.update({ content: 'No bookings left.', components: [] });
+    return interaction.update({ components: editMenuRows(interaction.user.id, ownerId, bookings, Number(page)) });
   }
 
   async function handleEditBookingSelect(interaction) {
@@ -227,7 +242,7 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
       }
     });
   }
-  return { handleEditBookings, handleEditBookingSelect, handleEditBookingSubmit };
+  return { handleEditBookings, handleEditBookingPage, handleEditBookingSelect, handleEditBookingSubmit };
 }
 
 module.exports = { createEditBookingHandlers };

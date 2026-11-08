@@ -34,6 +34,7 @@
   const { registerProcessHandlers } = require('./src/handlers/process');
   const { startStatsimHealthScheduler } = require('./src/services/traffic');
   const { startEventPositionScheduler } = require('./src/services/eventPositions');
+  const { startHousekeepingScheduler } = require('./src/services/housekeeping');
 
   dns.setDefaultResultOrder?.('ipv4first');
 
@@ -146,7 +147,8 @@
     startBookingCleanupScheduler: bookingLifecycle.startBookingCleanupScheduler,
     startEventThreadScheduler: eventThreadService.startEventThreadScheduler,
     startEndorsementWarningScheduler: endorsementWarningService.startEndorsementWarningScheduler,
-    startEventPositionScheduler: () => startEventPositionScheduler({ event, eventclose, getBookingChannel: discordHelpers.getBookingChannel, sendAuditLog })
+    startEventPositionScheduler: () => startEventPositionScheduler({ event, eventclose, getBookingChannel: discordHelpers.getBookingChannel, sendAuditLog }),
+    startHousekeepingScheduler: () => startHousekeepingScheduler({ eventThreads, endorsementWarnings })
   });
 
   interactionHandlers.registerInteractionHandlers();
