@@ -11,6 +11,7 @@ stub('../src/services/traffic', { formatSectorTraffic: async () => 'traffic', fo
 stub('../src/services/positions', { validateVatnzPosition: async () => ({ valid: true, meta: { suffix: 'CTR' } }), evaluateBookingEligibility: () => ({ allowed: true, mentorRequired: false }) });
 stub('../src/services/vatsim', { getVatsimId: async () => '1234567' });
 stub('../src/services/soloEndorsements', { applySoloEndorsementOverride: async ({ baseEligibility }) => baseEligibility });
+stub('../src/utils/http', { get: async () => ({ data: '' }) }); // empty VATNZ calendar for the booking limits
 const { createInteractionHandlers } = require('../src/handlers/interactions');
 const { createBookingLifecycle } = require('../src/services/bookingLifecycle');
 const { resolveBookingWindow } = require('../src/utils/time');

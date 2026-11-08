@@ -1,9 +1,10 @@
 const cheerio = require('cheerio');
-const axios = require('axios');
+const http = require('../utils/http');
 
 const { settings } = require('../data/databases');
 const { sectorAerodromeMap, sectorCodeMap } = require('../constants');
 const { DateTime, NZ_ZONE, buildUtcWindowFromNz, hhmmToClock } = require('../utils/time');
+const { log } = require('../utils/log');
 
 const trafficCache = new Map();
 const STATSIM_BASE_URL = 'https://statsim.net';
@@ -53,12 +54,7 @@ async function getTrafficData(icao, date, start = '0000', end = '2359') {
 
 async function fetchStatsimTraffic(icao, fromUtc, toUtc) {
   const url = `${STATSIM_BASE_URL}/events/custom/${encodeURIComponent(fromUtc)}/${encodeURIComponent(toUtc)}/${encodeURIComponent(icao)}`;
-  const { data: html } = await axios.get(url, {
-    timeout: getStatsimTimeoutMs(),
-    headers: {
-      'User-Agent': 'VATNZ-Booking-Bot/1.0 (+https://github.com/vatnz-dev/booking-bot)'
-    }
-  });
+  const { data: html } = await http.get(url, { timeout: getStatsimTimeoutMs() });
 
   return parseStatsimTrafficHtml(html, icao);
 }
@@ -125,7 +121,7 @@ function setStatsimEnabled(enabled, { actorId = null, reason = null, autoDisable
 function markStatsimUnavailable(error, revision = stateRevision) {
   if (revision !== stateRevision || !getStatsimState().enabled) return;
   setStatsimEnabled(false, { autoDisabled: true, reason: error?.message || 'StatSim lookup failed' });
-  console.warn('StatSim automatically disabled; recovery checks will continue.');
+  log('warn', 'statsim_auto_disabled', { error });
 }
 
 function getStatsimHealthCheckMs() {
@@ -147,7 +143,7 @@ async function checkStatsimHealth() {
       const current = getStatsimState();
       if (current.autoDisabled && revision === stateRevision) {
         setStatsimEnabled(true, { reason: 'StatSim recovered automatically' });
-        console.log('StatSim recovered; traffic lookups automatically enabled.');
+        log('info', 'statsim_recovered');
       }
       return true;
     } catch (error) {
@@ -164,7 +160,7 @@ async function checkStatsimHealth() {
 
 function startStatsimHealthScheduler() {
   if (healthCheckTimer) return;
-  const check = () => checkStatsimHealth().catch(error => console.warn('StatSim health check failed:', error.message));
+  const check = () => checkStatsimHealth().catch(error => log('warn', 'statsim_health_check_failed', { error }));
   void check();
   healthCheckTimer = setInterval(check, getStatsimHealthCheckMs());
   healthCheckTimer.unref();
@@ -203,7 +199,7 @@ function parseStatsimChartData(html, icao) {
 
     return { arrivals, departures };
   } catch (err) {
-    console.warn(`Could not parse StatSim chart data for ${icao}:`, err?.message || err);
+    log('warn', 'statsim_chart_parse_failed', { icao, error: err });
     return null;
   }
 }
@@ -333,7 +329,7 @@ async function formatAerodromeTraffic(position, date, start = '0000', end = '235
   try {
     dataSet = await getBestTrafficDataSet(aerodromes, date, start, end);
   } catch (err) {
-    console.warn('StatSim aerodrome traffic lookup failed:', err?.message || err);
+    log('warn', 'statsim_aerodrome_lookup_failed', { error: err });
     return STATSIM_DISABLED_MESSAGE;
   }
   const results = dataSet.results;
@@ -355,7 +351,7 @@ async function formatSectorTraffic(sectors, date, start = '0000', end = '2359') 
   try {
     dataSet = await getBestTrafficDataSet(aerodromes, date, start, end);
   } catch (err) {
-    console.warn('StatSim sector traffic lookup failed:', err?.message || err);
+    log('warn', 'statsim_sector_lookup_failed', { error: err });
     return STATSIM_DISABLED_MESSAGE;
   }
   const trafficByIcao = new Map(dataSet.results.map(result => [result.icao, result]));

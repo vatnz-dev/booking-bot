@@ -1,4 +1,5 @@
 const { LOG_CHANNEL_ID } = require('../constants');
+const { log } = require('../utils/log');
 
 function createDiscordHelpers({ client }) {
   async function fetchDiscordChannel(channelId, label = 'channel') {
@@ -6,7 +7,7 @@ function createDiscordHelpers({ client }) {
     try {
       return client.channels.cache.get(channelId) || await client.channels.fetch(channelId);
     } catch (err) {
-      console.warn(`Could not fetch ${label} ${channelId}:`, err?.message || err);
+      log('warn', 'channel_fetch_failed', { label, channelId, error: err });
       return null;
     }
   }
@@ -26,7 +27,7 @@ function createDiscordHelpers({ client }) {
       try {
         return await preferredChannel.messages.fetch(booking.messageId);
       } catch (err) {
-        console.warn(`Could not fetch booking message ${booking.messageId} from ${preferredChannelId}:`, err?.message || err);
+        log('warn', 'booking_message_fetch_failed', { messageId: booking.messageId, channelId: preferredChannelId, error: err });
       }
     }
 
@@ -36,7 +37,7 @@ function createDiscordHelpers({ client }) {
         try {
           return await fallbackChannel.messages.fetch(booking.messageId);
         } catch (err) {
-          console.warn(`Could not fetch booking message ${booking.messageId} from fallback channel:`, err?.message || err);
+          log('warn', 'booking_message_fetch_failed', { messageId: booking.messageId, channelId: process.env.CHANNEL_ID, fallback: true, error: err });
         }
       }
     }

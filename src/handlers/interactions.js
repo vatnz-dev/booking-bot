@@ -1,7 +1,5 @@
 const {
   ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
   EmbedBuilder,
   ModalBuilder,
   StringSelectMenuBuilder,
@@ -11,6 +9,8 @@ const {
 
 const {
   FSS_ROLE_ID,
+  GUILD_ID,
+  TRAINING_TEAM_ROLE_ID,
   MIN_BOOKING_DURATION_MINUTES,
   THUMBS_UP,
   allExtendableSectors,
@@ -37,6 +37,9 @@ const { getControllerRatingLabel } = require('../utils/controllerRating');
 const { cleanEmbedValue } = require('../utils/format');
 const { createEditBookingHandlers } = require('./editBookings');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
+const { getMentorRefusal } = require('../utils/permissions');
+const { log } = require('../utils/log');
+const { REFUSALS, describeGrants } = require('../services/access');
 const {
   resolveAerodromes,
   formatAerodromeTraffic,
@@ -47,10 +50,15 @@ const {
 } = require('../services/traffic');
 const { validateVatnzPosition, validateVatnzEventPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
+const { runBookingMutation } = require('../services/bookingQueue');
+const { bookingMenuRows } = require('../utils/bookingMenu');
+const { bookingLimitRefusal, mentorRequestRefusal } = require('../services/limits');
+const { formatOpenDate, describeOpenDates, readPosition, writePosition, parseOpenDate, matchOpenDates, eventPositionRefusal, deleteAnnouncement } = require('../services/eventPositions');
 // const { sendBooking, deleteVatsimBooking } = require('../services/vatsim');
 const {
   applySoloEndorsementOverride,
   buildExpiryWarning,
+  buildOverrideAuditEntry,
   buildSoloNotice,
   daysUntilEnd,
   endorsementCoversDate,
@@ -119,23 +127,30 @@ function createInteractionHandlers({
   event,
   eventclose,
   messages,
-  isStaffMember,
+  access,
   getBookingChannel,
   fetchBookingMessage,
   sendAuditLog,
   eventThreadService,
   bookingLifecycle
 }) {
-  const buttonCooldowns = new Map();
-  // Serialize booking changes across controllers, including async Discord sends,
-  // so a second submission sees the first submission's committed sectors.
-  let bookingMutation = Promise.resolve();
-  function runBookingMutation(action) {
-    const next = bookingMutation.then(action);
-    bookingMutation = next.catch(() => {});
-    return next;
+  const isBookingModerator = member => access.can('booking-moderator', member) === 'ok';
+
+  // Replies privately with the refusal and records it in the audit trail.
+  async function refuse(interaction, message, { deferred = false } = {}) {
+    const payload = { content: message, components: [], ephemeral: true };
+    await (deferred ? interaction.editReply(payload) : interaction.reply(payload));
+    await sendAuditLog({
+      action: 'Action Refused',
+      actorId: interaction.user?.id ?? interaction.member?.user?.id,
+      reason: message,
+      fields: [{ name: 'Action', value: interaction.commandName ?? interaction.customId ?? 'unknown', inline: true }],
+      color: '#D9534F'
+    });
   }
-  const editHandlers = createEditBookingHandlers({ client, messages, event, isStaffMember, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation });
+
+  const buttonCooldowns = new Map();
+  const editHandlers = createEditBookingHandlers({ client, messages, event, isBookingModerator, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation });
   const {
     clearMentorTimers,
     clearExtensionSelectionTimer,
@@ -164,9 +179,9 @@ function createInteractionHandlers({
 
     let endorsements;
     try {
-      endorsements = await fetchSoloEndorsements();
+      endorsements = await fetchSoloEndorsements({ audit: sendAuditLog });
     } catch (err) {
-      console.warn('Could not fetch VATNZ solo endorsements for /myendorsements:', err?.message || err);
+      log('warn', 'endorsements_fetch_failed', { command: 'myendorsements', error: err });
       await interaction.editReply({ content: 'Could not fetch VATNZ solo endorsements right now. Please try again later.' });
       return;
     }
@@ -223,13 +238,8 @@ function createInteractionHandlers({
   async function handleDeleteBookings(interaction) {
     const userId = String(interaction.member.user.id);
     const requestedController = interaction.options.getUser('controller');
-    const staff = isStaffMember(interaction.member);
-
-    if (requestedController && requestedController.id !== userId && !staff) {
-      await interaction.reply({
-        content: 'You can only delete your own bookings.',
-        ephemeral: true
-      });
+    if (requestedController && requestedController.id !== userId && !isBookingModerator(interaction.member)) {
+      await refuse(interaction, 'You can only delete your own bookings.');
       return;
     }
 
@@ -244,24 +254,50 @@ function createInteractionHandlers({
       return;
     }
 
-    const options = userBookings.slice(0, 25).map((b, index) => ({
-      label: `${b.position} on ${b.date} at ${b.start}`,
-      description: `Ends at ${b.end}`,
-      value: `${targetUserId}|${index}`
-    }));
-
-    const row = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId('delete_booking_select')
-        .setPlaceholder('Select a booking to delete')
-        .addOptions(options)
-    );
-
     await interaction.reply({
       content: targetUserId === userId ? '\u{1F5D1}\uFE0F Select a booking to delete:' : `\u{1F5D1}\uFE0F Select a booking to delete for <@${targetUserId}>:`,
-      components: [row],
+      components: deleteMenuRows(targetUserId, userBookings, 0),
       ephemeral: true
     });
+  }
+
+  // Menus name a booking by its message ID, never its place in the list.
+  function deleteMenuRows(ownerId, bookings, page) {
+    return bookingMenuRows({
+      bookings, page, menuId: 'delete_booking_select', pageId: `delete_booking_page:${ownerId}`,
+      placeholder: 'Select a booking to delete', value: b => `${ownerId}|${b.messageId}`
+    });
+  }
+
+  function mentorMenuRows(mentorId, bookings, page) {
+    return bookingMenuRows({
+      bookings, page, menuId: 'mentor_booking_select', pageId: `mentor_booking_page:${mentorId}`,
+      placeholder: 'Select a booking to notify your mentor', value: b => `${b.messageId}|${mentorId}`
+    });
+  }
+
+  // A booking moved into an event thread gets a new message ID; menus opened earlier hold the old one.
+  function findBookingIndex(bookings, messageId) {
+    return Array.isArray(bookings)
+      ? bookings.findIndex(b => b.messageId === messageId || b.previousMessageIds?.includes(messageId))
+      : -1;
+  }
+
+  async function handleBookingMenuPage(interaction) {
+    const [kind, id, page] = interaction.customId.split(':');
+    const userId = interaction.user.id;
+    if (kind === 'delete_booking_page' && id !== userId && !isBookingModerator(interaction.member)) {
+      await refuse(interaction, 'You can only delete your own bookings.');
+      return;
+    }
+    const ownerId = kind === 'delete_booking_page' ? id : userId;
+    const bookings = messages.get(ownerId);
+    if (!Array.isArray(bookings) || !bookings.length) {
+      await interaction.update({ content: '\u{1F4ED} No bookings left.', components: [] });
+      return;
+    }
+    const rows = kind === 'delete_booking_page' ? deleteMenuRows(ownerId, bookings, Number(page)) : mentorMenuRows(id, bookings, Number(page));
+    await interaction.update({ components: rows });
   }
 
   async function handleExpectedTraffic(interaction) {
@@ -303,7 +339,7 @@ function createInteractionHandlers({
         : await formatAerodromeTraffic(position, previousWeekDate, start.raw, end.raw);
       await interaction.editReply({ content: traffic });
     } catch (err) {
-      console.error('Expected traffic lookup failed:', err);
+      log('error', 'expected_traffic_failed', { error: err });
       await interaction.editReply({ content: 'Could not fetch expected traffic right now. Please try again later.' });
     }
   }
@@ -311,8 +347,8 @@ function createInteractionHandlers({
   async function handleStatsim(interaction) {
     await interaction.deferReply({ ephemeral: true });
 
-    if (!isStaffMember(interaction.member)) {
-      await interaction.editReply({ content: 'Only staff can change StatSim lookup status.' });
+    if (!access.isOwner(interaction.user.id)) {
+      await refuse(interaction, REFUSALS.owner, { deferred: true });
       return;
     }
 
@@ -375,28 +411,17 @@ function createInteractionHandlers({
 
   async function deleteBookingSelection(interaction) {
     const userId = String(interaction.member.user.id);
-    const [targetUserFromValue, selectedIndexFromValue] = String(interaction.values[0]).includes('|')
-      ? interaction.values[0].split('|')
-      : [userId, interaction.values[0]];
-    const selectedIndex = parseInt(selectedIndexFromValue, 10);
+    const [targetUserFromValue, messageId] = String(interaction.values[0]).split('|');
     const targetUserId = String(targetUserFromValue);
-    const staff = isStaffMember(interaction.member);
-
-    if (targetUserId !== userId && !staff) {
-      await interaction.editReply({
-        content: 'You can only delete your own bookings.',
-        components: []
-      });
+    if (targetUserId !== userId && !isBookingModerator(interaction.member)) {
+      await refuse(interaction, 'You can only delete your own bookings.', { deferred: true });
       return;
     }
 
     const userBookings = messages.get(targetUserId);
-
-    if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
-      await interaction.editReply({
-        content: '\u274C Booking not found.',
-        components: []
-      });
+    const selectedIndex = findBookingIndex(userBookings, messageId);
+    if (selectedIndex === -1) {
+      await interaction.editReply({ content: '\u274C That booking no longer exists.', components: [] });
       return;
     }
 
@@ -417,9 +442,12 @@ function createInteractionHandlers({
 
     try {
       const messageToDelete = await fetchBookingMessage(booking);
-      if (messageToDelete) await messageToDelete.delete();
+      if (messageToDelete) {
+        await messageToDelete.delete();
+        log('info', 'message_deleted', { messageId: booking.messageId, reason: targetUserId === userId ? 'booking_deleted' : 'staff_deleted_booking' });
+      }
     } catch (err) {
-      console.error(`\u26A0\uFE0F Could not delete message ${booking.messageId}:`, err);
+      log('error', 'booking_message_delete_failed', { messageId: booking.messageId, error: err });
     }
 
     await sendAuditLog({
@@ -536,15 +564,8 @@ function createInteractionHandlers({
       }
       const positionMeta = positionValidation.meta;
 
-      if (positionMeta.isEvent) {
-        const unlockedDate = event.get(pos);
-        if (!unlockedDate || unlockedDate === '0/0') {
-          return i.editReply({ content: '\u274C This event-only position is not open for bookings right now.', ephemeral: true });
-        }
-        if (unlockedDate !== date) {
-          return i.editReply({ content: `\u274C This event-only position is only open for ${unlockedDate}.`, ephemeral: true });
-        }
-      }
+      const eventRefusal = positionMeta.isEvent && eventPositionRefusal(event, pos, window.startNz.toISODate());
+      if (eventRefusal) return i.editReply({ content: `\u274C ${eventRefusal}`, ephemeral: true });
 
       if (positionMeta.suffix === 'FSS' && !member.roles.cache.has(FSS_ROLE_ID)) {
         return i.editReply({ content: '\u274C You do not have the Oceanic Endorsement required to book this FSS position.', ephemeral: true });
@@ -562,7 +583,8 @@ function createInteractionHandlers({
         cid: vatsimId,
         member,
         position: pos,
-        bookingDateNz
+        bookingDateNz,
+        audit: sendAuditLog
       });
       if (!eligibility.allowed) {
         return i.editReply({ content: eligibility.reason, ephemeral: true });
@@ -581,6 +603,8 @@ function createInteractionHandlers({
           ephemeral: true
         });
       }
+      const limitRefusal = await bookingLimitRefusal({ candidate: bookingDisplayRecord, others: messages.get(userId) || [] });
+      if (limitRefusal) return i.editReply({ content: `❌ ${limitRefusal}`, ephemeral: true });
       const isCTR = pos.endsWith("_CTR") && pos !== "NZAA-R_CTR";
       const extendedSectors = isCTR ? [...(autoInheritanceMap[pos] || [])] : [];
       const newBookingSectors = [pos, ...extendedSectors];
@@ -687,6 +711,8 @@ function createInteractionHandlers({
         reason: matchingEventThread ? `Routed to event thread: ${matchedEventName}` : 'Controller created a booking',
         color: '#00AEFF'
       });
+      if (soloEndorsement) await sendAuditLog(buildOverrideAuditEntry(soloEndorsement, userId, createdBooking));
+      if (positionMeta.isEvent) await sendAuditLog({ action: 'Event Position Booked', actorId: userId, targetUserId: userId, booking: createdBooking, color: '#00AEFF' });
 
       const prevDate = getPreviousWeekNZ(date, String(start).padStart(4, '0'));
       if (mentorRequired) {
@@ -872,20 +898,21 @@ function createInteractionHandlers({
   }
 
   async function handleOpenEventPosition(interaction) {
-    if (!isStaffMember(interaction.member)) {
-      await interaction.reply({ content: 'Only staff can open event positions.', ephemeral: true });
+    const permission = access.can('event-position', interaction.member);
+    if (permission !== 'ok') {
+      await refuse(interaction, REFUSALS[permission]);
       return;
     }
 
     await interaction.deferReply({ ephemeral: true });
 
     const position = interaction.options.getString('position').trim().toUpperCase();
-    const date = interaction.options.getString('date');
-
-    if (!/^\d{2}\/\d{2}$/.test(date)) {
-      await interaction.editReply({ content: 'Date must be in the format DD/MM (e.g., 25/06). Please correct it.' });
+    const parsed = parseOpenDate(interaction.options.getString('date'));
+    if (parsed.error) {
+      await interaction.editReply({ content: parsed.error });
       return;
     }
+    const date = formatOpenDate(parsed.iso);
 
     const positionValidation = await validateVatnzEventPosition(position);
     if (!positionValidation.valid) {
@@ -893,7 +920,11 @@ function createInteractionHandlers({
       return;
     }
 
-    event.set(position, date);
+    const state = readPosition({ event, eventclose }, position);
+    if (state.dates.includes(parsed.iso)) {
+      await interaction.editReply({ content: `${position} is already open on ${date}.` });
+      return;
+    }
 
     const embed = {
       color: 0x000000,
@@ -911,7 +942,10 @@ function createInteractionHandlers({
     }
     const sentMessage = await channel.send({ embeds: [embed] });
 
-    eventclose.set(position, sentMessage.id);
+    writePosition({ event, eventclose }, position, {
+      dates: [...state.dates, parsed.iso],
+      messages: { ...state.messages, [parsed.iso]: sentMessage.id }
+    });
     await sendAuditLog({
       action: 'Event Position Opened',
       actorId: interaction.user.id,
@@ -923,7 +957,7 @@ function createInteractionHandlers({
       color: '#00AEFF'
     });
 
-    await interaction.editReply({ content: `${position} opened!` });
+    await interaction.editReply({ content: `${position} opened for ${date}.` });
   }
 
   async function handleExtendSectorSelect(interaction) {
@@ -983,15 +1017,17 @@ function createInteractionHandlers({
         }
       }
 
-      let updated = false;
-
+      const added = [];
+      const taken = [];
       for (const selection of selections) {
         const [, sector] = selection.split('|');
-        if (!unavailable.has(sector) && !booking.extendedSectors.includes(sector)) {
+        if (unavailable.has(sector)) taken.push(sector);
+        else if (!booking.extendedSectors.includes(sector)) {
           booking.extendedSectors.push(sector);
-          updated = true;
+          added.push(sector);
         }
       }
+      const updated = added.length > 0;
 
       if (updated) {
         const msg = await fetchBookingMessage(booking);
@@ -1024,6 +1060,19 @@ function createInteractionHandlers({
       messages.set(userId, userBookings);
       if (updated) {
         await refreshEventCoverageNotificationsForBooking(booking);
+        const names = sectors => sectors.map(s => sectorCodeMap[s] || s).join(', ');
+        await sendAuditLog({
+          action: 'Sector Extensions Changed',
+          actorId: userId,
+          targetUserId: userId,
+          booking,
+          reason: 'Controller chose extra sectors after booking',
+          fields: [
+            { name: 'Added', value: names(added), inline: false },
+            ...(taken.length ? [{ name: 'Already taken, not added', value: names(taken), inline: false }] : [])
+          ],
+          color: '#00AEFF'
+        });
       }
 
       await interaction.editReply({ content: '\u2705 Extended sectors updated.', components: [] });
@@ -1042,7 +1091,7 @@ function createInteractionHandlers({
         ephemeral: true
       });
     } catch (err) {
-      console.error('\u274C Error in extend_sector_select handler:', err);
+      log('error', 'extend_sector_select_failed', { error: err });
       try {
         if (interaction.deferred || interaction.replied) {
           await interaction.editReply({ content: '\u274C Something went wrong.', components: [] });
@@ -1050,14 +1099,15 @@ function createInteractionHandlers({
           await interaction.reply({ content: '\u274C Something went wrong.', components: [], ephemeral: true });
         }
       } catch (e) {
-        console.warn('\u26A0\uFE0F Failed to send error reply:', e);
+        log('warn', 'error_reply_failed', { error: e });
       }
     }
   }
 
   async function handleCloseEventPosition(interaction) {
-    if (!isStaffMember(interaction.member)) {
-      await interaction.reply({ content: 'Only staff can close event positions.', ephemeral: true });
+    const permission = access.can('event-position', interaction.member);
+    if (permission !== 'ok') {
+      await refuse(interaction, REFUSALS[permission]);
       return;
     }
 
@@ -1070,23 +1120,25 @@ function createInteractionHandlers({
       return;
     }
 
-    event.set(position, '0/0');
-    const bookingChannel = await getBookingChannel();
-    const closeMessageId = eventclose.get(position);
-    if (bookingChannel?.messages && closeMessageId) {
-      try {
-        const s4dmessage = await bookingChannel.messages.fetch(closeMessageId);
-        await s4dmessage.delete();
-      } catch (err) {
-        console.warn(`Could not delete event close message ${closeMessageId}:`, err?.message || err);
-      }
+    // No date closes every open date; a date closes just that one.
+    const dateInput = interaction.options.getString('date');
+    const state = readPosition({ event, eventclose }, position);
+    const closing = dateInput ? matchOpenDates(state.dates, dateInput) : state.dates;
+    if (dateInput && !closing.length) {
+      await interaction.editReply({ content: `${position} isn't open on ${dateInput}.` });
+      return;
     }
-    await interaction.editReply({ content: `${position} closed!`, components: [] });
+
+    writePosition({ event, eventclose }, position, { ...state, dates: state.dates.filter(date => !closing.includes(date)) });
+    for (const date of closing) await deleteAnnouncement(getBookingChannel, state.messages[date]);
+    const closed = closing.length ? describeOpenDates(closing) : 'no open dates';
+    await interaction.editReply({ content: `${position} closed for ${closed}.`, components: [] });
     await sendAuditLog({
       action: 'Event Position Closed',
       actorId: interaction.user.id,
       fields: [
-        { name: 'Position', value: position, inline: true }
+        { name: 'Position', value: position, inline: true },
+        { name: 'Dates', value: closed, inline: true }
       ],
       color: '#D9534F'
     });
@@ -1094,20 +1146,36 @@ function createInteractionHandlers({
 
   async function handleMentorBookingSelect(interaction) {
     await interaction.deferUpdate();
+    return runBookingMutation(() => mentorBookingSelection(interaction));
+  }
 
-    const [selectedIndex, mentorId] = interaction.values[0].split('|');
+  async function mentorBookingSelection(interaction) {
+    const [messageId, mentorId] = interaction.values[0].split('|');
     const userId = String(interaction.member.user.id);
     const userBookings = messages.get(userId);
-
-    if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
-      await interaction.editReply({
-        content: '\u274C Booking not found.',
-        components: []
-      });
+    const selectedIndex = findBookingIndex(userBookings, messageId);
+    if (selectedIndex === -1) {
+      await interaction.editReply({ content: '\u274C That booking no longer exists.', components: [] });
       return;
     }
 
     const booking = userBookings[selectedIndex];
+
+    // One request per booking per cooldown, whichever mentor is tagged, so /mentor can't be used to spam DMs.
+    const cooldownRefusal = mentorRequestRefusal(booking);
+    if (cooldownRefusal) {
+      await interaction.editReply({ content: `❌ ${cooldownRefusal}`, components: [] });
+      await sendAuditLog({
+        action: 'Mentor Request Refused',
+        actorId: userId,
+        targetUserId: userId,
+        booking,
+        reason: cooldownRefusal,
+        fields: [{ name: 'Tagged', value: `<@${mentorId}> (${mentorId})`, inline: true }],
+        color: '#D9534F'
+      });
+      return;
+    }
 
     let messageLink = '';
     try {
@@ -1142,12 +1210,13 @@ function createInteractionHandlers({
         await s4dmessage.edit({ embeds: [newEmbed] });
       }
     } catch (err) {
-      console.error('\u274C Failed to fetch/update booking message:', err);
+      log('error', 'mentor_booking_message_update_failed', { messageId: booking.messageId, error: err });
     }
 
     booking.mentorId = mentorId;
     booking.mentorApproved = false;
     booking.mentorTaggedAt = new Date().toISOString();
+    booking.mentorRequestedAt = booking.mentorTaggedAt;
     messages.set(userId, userBookings);
     await sendAuditLog({
       action: 'Mentor Tagged Booking',
@@ -1177,8 +1246,9 @@ function createInteractionHandlers({
             : `${interaction.user.username} has booked **${booking.position}** ${getBookingWindowDisplay(booking)} and tagged you.`
         }]
       });
+      log('info', 'dm_sent', { userId: mentorId, reason: 'mentor_request', messageId: booking.messageId });
     } catch (err) {
-      console.error('\u274C Failed to DM mentor:', err);
+      log('error', 'dm_failed', { userId: mentorId, reason: 'mentor_request', error: err });
     }
 
     await interaction.editReply({
@@ -1192,6 +1262,18 @@ function createInteractionHandlers({
   async function handleMentor(interaction) {
     const userId = String(interaction.member.user.id);
     const mentor = interaction.options.getMember('mentor');
+    const refusal = getMentorRefusal(mentor, userId, TRAINING_TEAM_ROLE_ID);
+    if (refusal) {
+      await interaction.reply({ content: `❌ ${refusal}`, ephemeral: true });
+      await sendAuditLog({
+        action: 'Mentor Request Refused',
+        actorId: userId,
+        reason: refusal,
+        fields: [{ name: 'Tagged', value: mentor?.id ? `<@${mentor.id}> (${mentor.id})` : 'Unknown member', inline: true }],
+        color: '#D9534F'
+      });
+      return;
+    }
     const userBookings = messages.get(userId);
 
     if (!Array.isArray(userBookings) || userBookings.length === 0) {
@@ -1202,29 +1284,114 @@ function createInteractionHandlers({
       return;
     }
 
-    const options = userBookings.map((b, index) => ({
-      label: `${b.position} on ${b.date} at ${b.start}`,
-      description: `Ends at ${b.end}`,
-      value: `${index}|${mentor.id}`
-    }));
-
-    const row = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId('mentor_booking_select')
-        .setPlaceholder(`Select a booking to notify ${mentor.user.username}`)
-        .addOptions(options)
-    );
-
     await interaction.reply({
       content: `\u{1F468}\u200D\u{1F3EB} Select the booking you want to notify **${mentor.user.username}** about:`,
-      components: [row],
+      components: mentorMenuRows(mentor.id, userBookings, 0),
       ephemeral: true
     });
   }
 
+  // Training staff approval: checks run on the command and again on the form submit, since the booking may change in between.
+  async function checkTrainingApproval(interaction, messageId) {
+    const permission = access.can('mentor-approver', interaction.member);
+    if (permission !== 'ok') return refuse(interaction, REFUSALS[permission]);
+    const entry = bookingLifecycle.findBookingByMessageId(messageId);
+    if (!entry?.booking.mentorRequired || entry.booking.mentorApproved) {
+      return refuse(interaction, "This post isn't a booking awaiting mentor approval.");
+    }
+    if (entry.ownerId === interaction.user.id) return refuse(interaction, "You can't approve your own booking.");
+    return entry;
+  }
+
+  async function handleApproveBookingCommand(interaction) {
+    const messageId = interaction.targetMessage.id;
+    if (!await checkTrainingApproval(interaction, messageId)) return;
+    const modal = new ModalBuilder()
+      .setCustomId(`approve_booking:${messageId}`)
+      .setTitle('Approve booking')
+      .addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('reason')
+          .setLabel("Reason for approving on the mentor's behalf")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+          .setMaxLength(500)
+      ));
+    await interaction.showModal(modal);
+  }
+
+  async function handleApproveBookingSubmit(interaction) {
+    const messageId = interaction.customId.slice('approve_booking:'.length);
+    const reason = interaction.fields.getTextInputValue('reason').trim();
+    await runBookingMutation(async () => {
+      const entry = await checkTrainingApproval(interaction, messageId);
+      if (!entry) return;
+      if (!reason) return refuse(interaction, 'A reason is required.');
+      const window = getBookingWindowDisplay(entry.booking);
+      await bookingLifecycle.approveMentorBooking(entry, {
+        approverId: interaction.user.id,
+        mentorValue: `Approved by <@${interaction.user.id}> (training staff)`,
+        auditAction: 'Booking Approved by Training Staff',
+        reason,
+        dmText: `✅ Your **${entry.booking.position}** booking ${window} was approved by training staff.`
+      });
+      await interaction.reply({ content: `✅ Approved **${entry.booking.position}** ${window}.`, ephemeral: true });
+    });
+  }
+
+  async function handleMaintenance(interaction) {
+    if (!access.isOwner(interaction.user.id)) {
+      await refuse(interaction, REFUSALS.owner);
+      return;
+    }
+
+    const subcommand = interaction.options.getSubcommand();
+    if (subcommand === 'list') {
+      const lines = access.list().map(({ permission, source, ...grants }) => `**${permission}** (${source}): ${describeGrants(grants)}`);
+      await interaction.reply({ content: lines.join('\n'), allowedMentions: { parse: [] }, ephemeral: true });
+      return;
+    }
+
+    const permission = interaction.options.getString('permission');
+    const { role, user } = interaction.options.get('target') || {};
+    if (role?.id === interaction.guildId) {
+      await refuse(interaction, "@everyone can't be given bot permissions.");
+      return;
+    }
+    if (role?.managed) {
+      await refuse(interaction, "Roles managed by Discord or bots can't be used.");
+      return;
+    }
+
+    const kind = role ? 'roles' : 'users';
+    const id = (role || user).id;
+    const mention = role ? `<@&${id}>` : `<@${id}>`;
+    const { before, after } = access[subcommand](permission, kind, id);
+    await sendAuditLog({
+      action: 'Access Changed',
+      actorId: interaction.user.id,
+      reason: `${subcommand === 'add' ? 'Added' : 'Removed'} ${mention} ${subcommand === 'add' ? 'to' : 'from'} ${permission}`,
+      fields: [
+        { name: 'Permission', value: permission, inline: true },
+        { name: 'Before', value: describeGrants(before), inline: false },
+        { name: 'After', value: describeGrants(after), inline: false }
+      ],
+      color: '#5865F2'
+    });
+    await interaction.reply({ content: `Updated **${permission}**: ${describeGrants(after)}`, allowedMentions: { parse: [] }, ephemeral: true });
+  }
+
   function registerInteractionHandlers() {
     client.on('interactionCreate', async (interaction) => {
+      const startedAt = Date.now();
+      let result = 'ok';
       try {
+        if (interaction.guildId !== GUILD_ID) {
+          result = 'ignored';
+          log('warn', 'interaction_other_guild', { guildId: interaction.guildId, interactionId: interaction.id });
+          return;
+        }
+
         if (interaction.isChatInputCommand()) {
           switch (interaction.commandName) {
             case 'closeeventposition':
@@ -1242,6 +1409,9 @@ function createInteractionHandlers({
             case 'myendorsements':
               await handleMyEndorsements(interaction);
               break;
+            case 'maintenance':
+              await handleMaintenance(interaction);
+              break;
             case 'mentor':
               await handleMentor(interaction);
               break;
@@ -1258,9 +1428,22 @@ function createInteractionHandlers({
           return;
         }
 
+        if (interaction.isMessageContextMenuCommand?.()) {
+          if (interaction.commandName === 'Approve booking') await handleApproveBookingCommand(interaction);
+          return;
+        }
+
         if (interaction.isButton()) {
           if (interaction.customId.startsWith('event_thread_')) {
             await handleEventThreadButton(interaction);
+            return;
+          }
+          if (/^(delete|mentor)_booking_page:/.test(interaction.customId)) {
+            await handleBookingMenuPage(interaction);
+            return;
+          }
+          if (interaction.customId.startsWith('edit_booking_page:')) {
+            await editHandlers.handleEditBookingPage(interaction);
             return;
           }
 
@@ -1295,6 +1478,10 @@ function createInteractionHandlers({
             await editHandlers.handleEditBookingSubmit(interaction);
             return;
           }
+          if (interaction.customId.startsWith('approve_booking:')) {
+            await handleApproveBookingSubmit(interaction);
+            return;
+          }
           switch (interaction.customId) {
             case 'plan':
               await handlePlan(interaction);
@@ -1302,7 +1489,8 @@ function createInteractionHandlers({
           }
         }
       } catch (err) {
-        console.error('Interaction handler failed:', err);
+        result = 'error';
+        log('error', 'interaction_failed', { interactionId: interaction.id, error: err });
         try {
           const payload = { content: 'Something went wrong while handling that interaction. Please try again.', components: [], ephemeral: true };
           if (interaction.deferred || interaction.replied) {
@@ -1311,8 +1499,18 @@ function createInteractionHandlers({
             await interaction.reply(payload);
           }
         } catch (replyErr) {
-          console.warn('Could not send interaction error response:', replyErr?.message || replyErr);
+          log('warn', 'interaction_error_reply_failed', { interactionId: interaction.id, error: replyErr });
         }
+      } finally {
+        log('info', 'interaction', {
+          name: interaction.commandName ?? interaction.customId,
+          userId: interaction.user?.id,
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          interactionId: interaction.id,
+          result,
+          ms: Date.now() - startedAt
+        });
       }
     });
   }
@@ -1331,7 +1529,11 @@ function createInteractionHandlers({
     handleExtendSectorSelect,
     handleCloseEventPosition,
     handleMentorBookingSelect,
-    handleMentor
+    handleBookingMenuPage,
+    handleMentor,
+    handleMaintenance,
+    handleApproveBookingCommand,
+    handleApproveBookingSubmit
   };
 }
 

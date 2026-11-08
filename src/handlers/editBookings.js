@@ -1,19 +1,24 @@
 const { randomUUID } = require('node:crypto');
-const { ActionRowBuilder, EmbedBuilder, ModalBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { ActionRowBuilder, EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { bookingMenuRows } = require('../utils/bookingMenu');
 const { allExtendableSectors, autoInheritanceMap, sectorCodeMap, FSS_ROLE_ID, MIN_BOOKING_DURATION_MINUTES } = require('../constants');
 const { parseDdMm, parseHhmm, getDurationMinutes, resolveBookingWindow, formatBookingWindowForDiscord, formatBookingDateForDiscord, formatBookingStartForDiscord, formatBookingEndForDiscord } = require('../utils/time');
 const { getControllerRatingLabel } = require('../utils/controllerRating');
+const { cleanEmbedValue } = require('../utils/format');
+const { eventPositionRefusal } = require('../services/eventPositions');
+const { bookingLimitRefusal } = require('../services/limits');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
 const { validateVatnzPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
-const { applySoloEndorsementOverride, buildSoloNotice, formatEndorsementScope } = require('../services/soloEndorsements');
+const { applySoloEndorsementOverride, buildOverrideAuditEntry, buildSoloNotice, formatEndorsementScope } = require('../services/soloEndorsements');
 const { formatSectorTraffic, formatAerodromeTraffic } = require('../services/traffic');
+const { log } = require('../utils/log');
 
 // Compare editable and lifecycle state too: an old form must never overwrite a
 // mentor approval, extension selection, reminder or event-thread relocation.
 const revision = booking => JSON.stringify(booking);
 
-function createEditBookingHandlers({ client, messages, event, isStaffMember, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation }) {
+function createEditBookingHandlers({ client, messages, event, isBookingModerator, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation }) {
   const sessions = new Map();
   const { findMatchingEventThreadForBooking, refreshEventCoverageNotificationsForBooking } = eventThreadService;
 
@@ -29,7 +34,7 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
   function resolve(token, interaction) {
     const session = sessions.get(token);
     if (!session || session.expires < Date.now() || session.actorId !== interaction.user.id) return null;
-    if (session.ownerId !== interaction.user.id && !isStaffMember(interaction.member)) return null;
+    if (session.ownerId !== interaction.user.id && !isBookingModerator(interaction.member)) return null;
     const bookings = messages.get(session.ownerId);
     const booking = Array.isArray(bookings) && bookings.find(b => b.messageId === session.messageId);
     if (!booking || revision(booking) !== session.revision) return null;
@@ -38,22 +43,37 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
 
   async function handleEditBookings(interaction) {
     const ownerId = interaction.options.getUser('controller')?.id || interaction.user.id;
-    if (ownerId !== interaction.user.id && !isStaffMember(interaction.member)) {
-      return interaction.reply({ content: 'You can only edit your own bookings.', ephemeral: true });
+    if (ownerId !== interaction.user.id && !isBookingModerator(interaction.member)) {
+      await interaction.reply({ content: 'You can only edit your own bookings.', ephemeral: true });
+      return sendAuditLog({ action: 'Action Refused', actorId: interaction.user.id, targetUserId: ownerId, reason: 'Tried to edit another controller\'s booking', color: '#D9534F' });
     }
     const bookings = messages.get(ownerId);
     if (!Array.isArray(bookings) || !bookings.length) {
       return interaction.reply({ content: ownerId === interaction.user.id ? 'You have no current bookings.' : `<@${ownerId}> has no current bookings.`, ephemeral: true });
     }
-    const options = bookings.slice(0, 25).map(booking => ({
-      label: `${booking.position} on ${booking.date} at ${String(booking.start).padStart(4, '0')}`.slice(0, 100),
-      description: `Ends at ${String(booking.end).padStart(4, '0')}`,
-      value: remember(interaction.user.id, ownerId, booking)
-    }));
     return interaction.reply({
       content: `Select a booking to edit${ownerId === interaction.user.id ? '' : ` for <@${ownerId}>`}:`, ephemeral: true,
-      components: [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('edit_booking_select').setPlaceholder('Select a booking to edit').addOptions(options))]
+      components: editMenuRows(interaction.user.id, ownerId, bookings, 0)
     });
+  }
+
+  // Edit links (sessions) are made only for the bookings on the page being shown.
+  function editMenuRows(actorId, ownerId, bookings, page) {
+    return bookingMenuRows({
+      bookings, page, menuId: 'edit_booking_select', pageId: `edit_booking_page:${ownerId}`,
+      placeholder: 'Select a booking to edit', value: booking => remember(actorId, ownerId, booking)
+    });
+  }
+
+  async function handleEditBookingPage(interaction) {
+    const [, ownerId, page] = interaction.customId.split(':');
+    if (ownerId !== interaction.user.id && !isBookingModerator(interaction.member)) {
+      await interaction.reply({ content: 'You can only edit your own bookings.', ephemeral: true });
+      return sendAuditLog({ action: 'Action Refused', actorId: interaction.user.id, targetUserId: ownerId, reason: 'Tried to page another controller\'s bookings for editing', color: '#D9534F' });
+    }
+    const bookings = messages.get(ownerId);
+    if (!Array.isArray(bookings) || !bookings.length) return interaction.update({ content: 'No bookings left.', components: [] });
+    return interaction.update({ components: editMenuRows(interaction.user.id, ownerId, bookings, Number(page)) });
   }
 
   async function handleEditBookingSelect(interaction) {
@@ -97,12 +117,14 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
       if (!window) return fail('Choose a valid future session, or keep an active booking on its current date.');
       const validation = await validateVatnzPosition(position);
       if (!validation.valid) return fail(validation.reason);
-      if (validation.meta.isEvent && event.get(position) !== date) return fail('This event-only position is not open on that date.');
+      const eventRefusal = validation.meta.isEvent && eventPositionRefusal(event, position, window.startNz.toISODate());
+      if (eventRefusal) return fail(eventRefusal);
+      const bookedEventPosition = validation.meta.isEvent && (position !== before.position || date !== before.date);
       const member = session.ownerId === interaction.user.id ? interaction.member : await interaction.guild.members.fetch(session.ownerId);
       if (validation.meta.suffix === 'FSS' && !member.roles.cache.has(FSS_ROLE_ID)) return fail('The controller needs the Oceanic Endorsement for this FSS position.');
       const cid = await getVatsimId(session.ownerId);
       if (!cid) return fail('Could not retrieve the controller\'s linked VATSIM ID. Please try again later.');
-      const eligibility = await applySoloEndorsementOverride({ baseEligibility: evaluateBookingEligibility(member, position), cid, member, position, bookingDateNz: window.startNz });
+      const eligibility = await applySoloEndorsementOverride({ baseEligibility: evaluateBookingEligibility(member, position), cid, member, position, bookingDateNz: window.startNz, audit: sendAuditLog });
       if (!eligibility.allowed) return fail(eligibility.reason);
 
       const isCtr = position.endsWith('_CTR') && position !== 'NZAA-R_CTR';
@@ -127,6 +149,9 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
           if (occupied) return fail(`${occupied} is already booked or extended into by <@${key}> ${formatBookingWindowForDiscord(other)}. Choose a different time, position or extra sectors.`);
         }
       }
+      const ownOthers = (messages.get(session.ownerId) || []).filter(b => b.messageId !== before.messageId);
+      const limitRefusal = await bookingLimitRefusal({ candidate, others: ownOthers, previous: before });
+      if (limitRefusal) return fail(limitRefusal);
 
       const match = await findMatchingEventThreadForBooking(candidate);
       const channel = match?.thread || await getBookingChannel();
@@ -137,7 +162,8 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
       const solo = eligibility.soloEndorsement;
       Object.assign(candidate, {
         mentorRequired: eligibility.mentorRequired === true, mentorId: null, mentorApproved: false,
-        mentorTaggedAt: null, mentorApprovedAt: null, awaitingExtensionSelection: false,
+        // The edit asks for /mentor again within 5 minutes, so the request cooldown restarts with it.
+        mentorTaggedAt: null, mentorRequestedAt: null, mentorApprovedAt: null, awaitingExtensionSelection: false,
         mentorTagRequestedAt: new Date().toISOString(),
         reminderSentAt: null, reminderMinutes: null, updatedAt: new Date().toISOString(),
         threadId: match?.thread?.id || null, eventUid: match?.state?.event?.uid || null,
@@ -152,7 +178,7 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
       ).setThumbnail(member.user.displayAvatarURL());
       const ratingLabel = getControllerRatingLabel(member);
       if (ratingLabel) embed.setFooter({ text: ratingLabel });
-      if (candidate.eventName) embed.addFields({ name: 'Event', value: candidate.eventName });
+      if (candidate.eventName) embed.addFields({ name: 'Event', value: cleanEmbedValue(candidate.eventName) });
       if (extendedSectors.length) embed.addFields({ name: 'Extended Sectors', value: extendedSectors.map(s => sectorCodeMap[s] || s).join(', ') });
       if (solo) embed.addFields({ name: 'Solo Endorsement', value: buildSoloNotice(solo) });
 
@@ -161,6 +187,7 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
       const posted = await channel.send({ embeds: [embed] });
       if (!resolve(token, interaction)) {
         await posted.delete();
+        log('info', 'message_deleted', { messageId: posted.id, reason: 'edit_superseded' });
         return fail('This booking changed while saving. Run /editbookings again.');
       }
       candidate.messageId = posted.id;
@@ -170,6 +197,7 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
       const bookings = messages.get(session.ownerId).map(b => b.messageId === before.messageId ? candidate : b);
       try { messages.set(session.ownerId, bookings); } catch (err) {
         await posted.delete();
+        log('info', 'message_deleted', { messageId: posted.id, reason: 'edit_save_failed' });
         throw err;
       }
       sessions.delete(token);
@@ -179,23 +207,29 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
       bookingLifecycle.scheduleBookingReminder(session.ownerId, candidate);
       if (candidate.mentorRequired) bookingLifecycle.scheduleMentorTagTimeout(session.ownerId, candidate.messageId);
       let cleanupWarning = '';
-      try { await oldMessage.delete(); } catch (err) {
-        console.warn('Could not remove previous booking message after edit:', err?.message || err);
+      try {
+        await oldMessage.delete();
+        log('info', 'message_deleted', { messageId: oldMessage.id, reason: 'booking_edited' });
+      } catch (err) {
+        log('warn', 'edit_old_message_delete_failed', { error: err });
         cleanupWarning = '\nThe previous Discord post could not be removed; staff should remove it.';
       }
       // A failure in ancillary notifications must not imply the saved edit failed.
       for (const action of [
         () => refreshEventCoverageNotificationsForBooking(before),
         () => refreshEventCoverageNotificationsForBooking(candidate),
-        () => sendAuditLog({ action: 'Booking Edited', actorId: interaction.user.id, targetUserId: session.ownerId, booking: candidate, reason: `Previously ${before.position} ${formatBookingWindowForDiscord(before)}; sectors: ${(before.extendedSectors || []).join(', ') || 'none'}`, color: '#00AEFF' })
+        () => sendAuditLog({ action: 'Booking Edited', actorId: interaction.user.id, targetUserId: session.ownerId, booking: candidate, reason: `Previously ${before.position} ${formatBookingWindowForDiscord(before)}; sectors: ${(before.extendedSectors || []).join(', ') || 'none'}`, color: '#00AEFF' }),
+        ...(solo ? [() => sendAuditLog(buildOverrideAuditEntry(solo, session.ownerId, candidate))] : []),
+        ...(bookedEventPosition ? [() => sendAuditLog({ action: 'Event Position Booked', actorId: interaction.user.id, targetUserId: session.ownerId, booking: candidate, reason: 'Booking edited onto an event-only position', color: '#00AEFF' })] : [])
       ]) {
-        try { await action(); } catch (err) { console.warn('Booking edit notification failed:', err?.message || err); }
+        try { await action(); } catch (err) { log('warn', 'edit_notification_failed', { error: err }); }
       }
       if (session.ownerId !== interaction.user.id) {
         try {
           const owner = await client.users.fetch(session.ownerId);
           await owner.send({ content: `Staff updated your booking to **${position}** ${formatBookingWindowForDiscord(candidate)}.${candidate.mentorRequired ? '\nMentor approval has been reset. Use /mentor to tag your mentor again within 5 minutes.' : ''}` });
-        } catch (err) { console.warn('Could not DM controller about staff booking edit:', err?.message || err); }
+          log('info', 'dm_sent', { userId: session.ownerId, reason: 'staff_edit' });
+        } catch (err) { log('warn', 'dm_failed', { reason: 'staff_edit', error: err }); }
       }
       await interaction.editReply({ content: `Booking updated: **${position}** ${formatBookingWindowForDiscord(candidate)}.${candidate.mentorRequired ? '\nMentor approval has been reset. Use /mentor to tag your mentor again within 5 minutes.' : ''}${cleanupWarning}` });
       try {
@@ -203,12 +237,12 @@ function createEditBookingHandlers({ client, messages, event, isStaffMember, get
         const traffic = isCtr ? await formatSectorTraffic([position, ...extendedSectors], previousWeek, start, end) : await formatAerodromeTraffic(position, previousWeek, start, end);
         await interaction.followUp({ content: traffic, ephemeral: true });
       } catch (err) {
-        console.warn('Edited booking traffic lookup failed:', err?.message || err);
+        log('warn', 'edit_traffic_lookup_failed', { error: err });
         await interaction.followUp({ content: 'No StatSim data available at the moment due to server/bot errors.', ephemeral: true });
       }
     });
   }
-  return { handleEditBookings, handleEditBookingSelect, handleEditBookingSubmit };
+  return { handleEditBookings, handleEditBookingPage, handleEditBookingSelect, handleEditBookingSubmit };
 }
 
 module.exports = { createEditBookingHandlers };

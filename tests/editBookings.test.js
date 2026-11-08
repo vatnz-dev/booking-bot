@@ -6,6 +6,7 @@ const { DateTime, NZ_ZONE, convertToUTC } = require('../src/utils/time');
 const stub = (path, exports) => { require.cache[require.resolve(path)] = { exports, loaded: true }; };
 const date = DateTime.now().setZone(NZ_ZONE).plus({ days: 7 }).toFormat('dd/MM');
 let validation, eligibility, validateHook, trafficCalls;
+stub('../src/utils/http', { get: async () => ({ data: '' }) }); // empty VATNZ calendar for the booking limits
 stub('../src/services/positions', {
   validateVatnzPosition: async () => { if (validateHook) await validateHook(); return validation; },
   evaluateBookingEligibility: () => eligibility
@@ -41,7 +42,7 @@ function fixture({ others = {}, staff = false, owner = 'owner' } = {}) {
     set: (id, value) => { data[id] = structuredClone(value); calls.push('save'); }
   };
   const dependencies = {
-    messages, event: { get: () => '0/0' }, client: { users: { fetch: async () => ({ send: async payload => calls.push(['owner-dm', payload]) }) } }, isStaffMember: () => staff,
+    messages, event: { get: () => '0/0' }, client: { users: { fetch: async () => ({ send: async payload => calls.push(['owner-dm', payload]) }) } }, access: { can: () => (staff ? 'ok' : 'denied') },
     getBookingChannel: async () => channel,
     fetchBookingMessage: async () => ({ delete: async () => calls.push('delete-old') }),
     sendAuditLog: async entry => audits.push(entry),
@@ -190,7 +191,8 @@ test('event-only position checks and routing are refreshed', async () => {
   const f = fixture(); await f.open();
   validation.meta.isEvent = true;
   await f.submit(); assert.equal(f.posts.length, 0);
-  f.dependencies.event.get = () => date;
+  assert.match(f.replies.at(-1).content, /not open for bookings right now/);
+  f.dependencies.event.get = () => [DateTime.now().setZone(NZ_ZONE).plus({ days: 7 }).toISODate()];
   const thread = { ...f.channel, id: 'event-thread' };
   f.dependencies.eventThreadService.findMatchingEventThreadForBooking = async () => ({ thread, state: { event: { title: 'Test Event', uid: 'event-uid' } } });
   // Factories capture the service functions, so recreate handlers and picker.
@@ -202,6 +204,9 @@ test('event-only position checks and routing are refreshed', async () => {
   await f.handlers.handleEditBookingSubmit(f.interaction);
   assert.equal(f.data.owner[0].threadId, 'event-thread');
   assert.equal(f.data.owner[0].eventName, 'Test Event');
+  const booked = f.audits.find(a => a.action === 'Event Position Booked');
+  assert.equal(booked.targetUserId, 'owner');
+  assert.equal(booked.booking.position, 'NZAA_TWR');
 });
 
 test('failed Discord send preserves original booking and releases mutation queue', async () => {

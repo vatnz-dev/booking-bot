@@ -1,12 +1,12 @@
 const cheerio = require('cheerio');
-const axios = require('axios');
+const http = require('../utils/http');
 
 const {
   FALLBACK_EVENT_POSITIONS,
   VATNZ_POSITIONS_URL,
   VATNZ_POSITION_CACHE_MS
 } = require('../constants');
-const { summarizeError } = require('../utils/format');
+const { log } = require('../utils/log');
 
 let vatnzPositionCache = {
   fetchedAt: 0,
@@ -56,7 +56,7 @@ async function fetchVatnzPositions({ force = false } = {}) {
   }
 
   try {
-    const { data: html } = await axios.get(VATNZ_POSITIONS_URL, { timeout: 15000 });
+    const { data: html } = await http.get(VATNZ_POSITIONS_URL);
     const positions = parseVatnzPositions(html);
     if (positions.size === 0) throw new Error('VATNZ position table was empty');
 
@@ -66,7 +66,7 @@ async function fetchVatnzPositions({ force = false } = {}) {
     };
   } catch (err) {
     if (vatnzPositionCache.positions.size > 0) {
-      console.warn(`Using cached VATNZ positions after fetch failed: ${summarizeError(err)}`);
+      log('warn', 'positions_using_cache', { error: err });
       return vatnzPositionCache.positions;
     }
     throw err;
@@ -80,7 +80,7 @@ async function validateVatnzPosition(position) {
   try {
     positions = await fetchVatnzPositions();
   } catch (err) {
-    console.warn(`Could not verify VATNZ position directory: ${summarizeError(err)}`);
+    log('warn', 'positions_verify_failed', { error: err });
     return {
       valid: false,
       reason: 'Could not verify the VATNZ position directory right now. Please try again shortly.'
@@ -121,7 +121,7 @@ async function getVatnzEventPositions() {
 
     return eventPositions.length > 0 ? eventPositions : FALLBACK_EVENT_POSITIONS;
   } catch (err) {
-    console.warn(`Could not fetch VATNZ event position list: ${summarizeError(err)}`);
+    log('warn', 'event_positions_fetch_failed', { error: err });
     return FALLBACK_EVENT_POSITIONS;
   }
 }

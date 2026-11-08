@@ -1,4 +1,16 @@
 const { FALLBACK_EVENT_POSITIONS } = require('../constants');
+const { PERMISSIONS } = require('../services/access');
+
+const accessOptions = [
+  {
+    type: 3,
+    name: 'permission',
+    description: 'Which permission to change.',
+    required: true,
+    choices: Object.entries(PERMISSIONS).map(([value, { label }]) => ({ name: `${value}: ${label}`.slice(0, 100), value }))
+  },
+  { type: 9, name: 'target', description: 'The role or user.', required: true }
+];
 
 const eventPositionChoices = FALLBACK_EVENT_POSITIONS.map((value) => ({
   name: value.toLowerCase(),
@@ -103,7 +115,7 @@ module.exports = [
       {
         type: 3,
         name: 'date',
-        description: 'What date do you want to open? Format: DD/MM',
+        description: 'Date to open: DD/MM (this year) or DD/MM/YYYY',
         required: true
       }
     ]
@@ -118,8 +130,35 @@ module.exports = [
         description: 'What position do you want to close?',
         required: true,
         choices: eventPositionChoices
+      },
+      {
+        type: 3,
+        name: 'date',
+        description: 'Date to close: DD/MM or DD/MM/YYYY. Leave out to close every date.',
+        required: false
       }
     ]
+  },
+  {
+    // Message context menu (right-click a booking post > Apps); hidden until allowed in Server Settings > Integrations.
+    name: 'Approve booking',
+    type: 3,
+    default_member_permissions: '0'
+  },
+  {
+    name: 'maintenance',
+    description: 'Bot owners: manage who can use staff features.',
+    default_member_permissions: '0',
+    options: [{
+      type: 2,
+      name: 'access',
+      description: 'Manage who has each permission.',
+      options: [
+        { type: 1, name: 'add', description: 'Give a role or user a permission.', options: accessOptions },
+        { type: 1, name: 'remove', description: 'Take a permission away from a role or user.', options: accessOptions },
+        { type: 1, name: 'list', description: 'Show who has each permission.' }
+      ]
+    }]
   },
   {
     name: 'mentor',

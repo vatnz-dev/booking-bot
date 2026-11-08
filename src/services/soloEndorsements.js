@@ -1,4 +1,4 @@
-const axios = require('axios');
+const http = require('../utils/http');
 const cheerio = require('cheerio');
 
 const {
@@ -9,14 +9,19 @@ const {
   SOLO_ENDORSEMENTS_URL
 } = require('../constants');
 const { DateTime, buildNzDateTime } = require('../utils/time');
-const { summarizeError } = require('../utils/format');
+const { log } = require('../utils/log');
 const { getControllerTier } = require('./positions');
 
 const NZ_ZONE = 'Pacific/Auckland';
 
+const RETRY_AFTER_FAILURE_MS = 15 * 60 * 1000;
+// Past this age an old copy is no longer trusted: overrides stop and bookings need mentor approval.
+const MAX_STALE_MS = 24 * 60 * 60 * 1000;
+
 let endorsementCache = {
   fetchedAt: 0,
-  endorsements: []
+  failedAt: 0,
+  endorsements: null
 };
 
 function normalizeText(value) {
@@ -51,28 +56,40 @@ function getTableHeading($, table) {
   return 'Solo Endorsement';
 }
 
+// Only tables whose header row has these columns are endorsement tables; anything else on the page is ignored.
+function findEndorsementTables($, columns, url) {
+  const tables = $('table').filter((_, table) => {
+    const header = $(table).find('tr').first().find('th, td').map((__, cell) => normalizeText($(cell).text())).get();
+    return columns.every(column => header.includes(column));
+  });
+  if (tables.length === 0) throw new Error(`Endorsement table not found on ${url}`);
+  return tables;
+}
+
 function parseApprovedSoloEndorsements(html) {
   const $ = cheerio.load(html);
   const endorsements = [];
 
-  $('table').each((_, table) => {
+  findEndorsementTables($, ['CID', 'Position', 'End Date'], SOLO_ENDORSEMENTS_URL).each((_, table) => {
     const category = getTableHeading($, table);
     $(table).find('tr').slice(1).each((__, row) => {
-      const cells = $(row).find('td').map((___, cell) => normalizeText($(cell).text())).get();
+      const tds = $(row).find('td');
+      const cells = tds.map((___, cell) => normalizeText($(cell).text())).get();
       if (cells.length < 6 || cells.every(cell => !cell)) return;
 
-      const [name, cid, position, startDate, endDate, approvedBy] = cells;
+      const [name, cid, , startDate, endDate, approvedBy] = cells;
+      const positions = cellList($, tds[2]);
       const startDateNz = parseNzDate(startDate);
       const endDateNz = parseNzDate(endDate);
-      if (!cid || !position || !endDateNz) return;
+      if (!cid || positions.length === 0 || !endDateNz) return;
 
       endorsements.push({
         source: 'solo',
         category,
         name,
         cid: String(cid),
-        position: position.toUpperCase(),
-        positions: [position.toUpperCase()],
+        position: positions.join(', '),
+        positions,
         locations: [],
         startDate,
         endDate,
@@ -88,26 +105,33 @@ function parseApprovedSoloEndorsements(html) {
 }
 
 function splitList(value) {
-  return normalizeText(value)
-    .split(',')
-    .map(part => part.trim().toUpperCase())
-    .filter(Boolean);
+  // Codes never contain spaces; the live S1 page separates them with spaces ("DEL GND TWR").
+  return String(value || '').split(/[\s,]+/).map(part => part.toUpperCase()).filter(Boolean);
+}
+
+// A cell can hold one value per <p> or <br>; .text() would join them with no separator.
+function cellList($, cell) {
+  const $cell = $(cell).clone();
+  $cell.find('br').replaceWith(',');
+  $cell.find('p, div, li').after(',');
+  return splitList($cell.text());
 }
 
 function parseS1SoloEndorsements(html) {
   const $ = cheerio.load(html);
   const endorsements = [];
 
-  $('table').each((_, table) => {
+  findEndorsementTables($, ['CID', 'Location(s)', 'Position(s)', 'Expiry Date'], S1_SOLO_ENDORSEMENTS_URL).each((_, table) => {
     $(table).find('tr').slice(1).each((__, row) => {
-      const cells = $(row).find('td').map((___, cell) => normalizeText($(cell).text())).get();
+      const tds = $(row).find('td');
+      const cells = tds.map((___, cell) => normalizeText($(cell).text())).get();
       if (cells.length < 7 || cells.every(cell => !cell)) return;
 
-      const [name, cid, locationsRaw, positionsRaw, approvedBy, issueDate, expiryDate] = cells;
+      const [name, cid, , , approvedBy, issueDate, expiryDate] = cells;
       const startDateNz = parseNzDate(issueDate);
       const endDateNz = parseNzDate(expiryDate);
-      const locations = splitList(locationsRaw);
-      const suffixes = splitList(positionsRaw);
+      const locations = cellList($, tds[2]);
+      const suffixes = cellList($, tds[3]);
       if (!cid || locations.length === 0 || suffixes.length === 0 || !endDateNz) return;
 
       endorsements.push({
@@ -131,34 +155,55 @@ function parseS1SoloEndorsements(html) {
   return endorsements;
 }
 
-async function fetchSoloEndorsements({ force = false } = {}) {
+// `audit` is sendAuditLog; fallbacks and suspensions are posted once per failed download.
+async function fetchSoloEndorsements({ force = false, audit = null } = {}) {
   const now = Date.now();
-  if (!force && endorsementCache.endorsements.length > 0 && now - endorsementCache.fetchedAt < SOLO_ENDORSEMENT_CACHE_MS) {
-    return endorsementCache.endorsements;
+  const { endorsements, fetchedAt, failedAt } = endorsementCache;
+  const age = now - fetchedAt;
+  const usable = Boolean(endorsements) && age <= MAX_STALE_MS;
+  if (!force && endorsements && age < SOLO_ENDORSEMENT_CACHE_MS) return endorsements;
+  if (!force && now - failedAt < RETRY_AFTER_FAILURE_MS) {
+    if (usable) return endorsements;
+    throw new Error('Endorsement list unavailable; waiting before retrying');
   }
 
   try {
     const [solo, s1] = await Promise.all([
-      axios.get(SOLO_ENDORSEMENTS_URL, { timeout: 15000 }),
-      axios.get(S1_SOLO_ENDORSEMENTS_URL, { timeout: 15000 })
+      http.get(SOLO_ENDORSEMENTS_URL),
+      http.get(S1_SOLO_ENDORSEMENTS_URL)
     ]);
-
     endorsementCache = {
       fetchedAt: now,
+      failedAt: 0,
       endorsements: [
         ...parseApprovedSoloEndorsements(solo.data),
         ...parseS1SoloEndorsements(s1.data)
       ]
     };
+    return endorsementCache.endorsements;
   } catch (err) {
-    if (endorsementCache.endorsements.length > 0) {
-      console.warn(`Using cached VATNZ solo endorsements after fetch failed: ${summarizeError(err)}`);
-      return endorsementCache.endorsements;
+    endorsementCache = { ...endorsementCache, failedAt: now };
+    if (usable) {
+      const ageHours = Math.round(age / (60 * 60 * 1000));
+      log('warn', 'endorsements_using_cache', { ageHours, error: err });
+      await audit?.({ action: 'Using Older Endorsement List', actorLabel: 'System', reason: `Download failed (${err.message}). Using the list from ${ageHours} hours ago.`, color: '#FF9900' });
+      return endorsements;
     }
+    log('error', 'endorsement_overrides_suspended', { error: err });
+    await audit?.({ action: 'Endorsement Overrides Suspended', actorLabel: 'System', reason: `Download failed (${err.message}) and there is no list from the last 24 hours, so bookings need mentor approval.`, color: '#D9534F' });
     throw err;
   }
+}
 
-  return endorsementCache.endorsements;
+function buildOverrideAuditEntry(endorsement, userId, booking) {
+  return {
+    action: 'Endorsement Override Used',
+    actorLabel: 'System',
+    targetUserId: userId,
+    booking,
+    reason: `${formatEndorsementScope(endorsement)} (expires ${endorsement.endDate}) lets this booking skip mentor approval`,
+    color: '#5865F2'
+  };
 }
 
 function getBookingStartNz(dateStr, startTime) {
@@ -231,8 +276,8 @@ function buildExpiryWarning(endorsement, nowNz = DateTime.now().setZone(NZ_ZONE)
   return `Warning: your solo endorsement for ${formatEndorsementScope(endorsement)} expires in ${days} days (${endorsement.endDate}).`;
 }
 
-async function findMatchingSoloEndorsement({ cid, member, position, bookingDateNz }) {
-  const endorsements = await fetchSoloEndorsements();
+async function findMatchingSoloEndorsement({ cid, member, position, bookingDateNz, audit }) {
+  const endorsements = await fetchSoloEndorsements({ audit });
   return endorsements.find(endorsement =>
     endorsement.cid === String(cid) &&
     endorsementMatchesPosition(endorsement, position, member) &&
@@ -240,16 +285,16 @@ async function findMatchingSoloEndorsement({ cid, member, position, bookingDateN
   ) || null;
 }
 
-async function applySoloEndorsementOverride({ baseEligibility, cid, member, position, bookingDateNz }) {
+async function applySoloEndorsementOverride({ baseEligibility, cid, member, position, bookingDateNz, audit = null }) {
   if (baseEligibility.allowed && baseEligibility.mentorRequired === false) {
     return { ...baseEligibility, soloEndorsement: null };
   }
 
   let endorsement = null;
   try {
-    endorsement = await findMatchingSoloEndorsement({ cid, member, position, bookingDateNz });
+    endorsement = await findMatchingSoloEndorsement({ cid, member, position, bookingDateNz, audit });
   } catch (err) {
-    console.warn(`Could not verify VATNZ solo endorsements: ${summarizeError(err)}`);
+    log('warn', 'endorsements_verify_failed', { error: err });
   }
 
   if (!endorsement) return { ...baseEligibility, soloEndorsement: null };
@@ -273,7 +318,7 @@ function endorsementWarningKey(userId, endorsement, days) {
   ].join(':');
 }
 
-function createEndorsementWarningService({ client, messages, endorsementWarnings, getVatsimId }) {
+function createEndorsementWarningService({ client, messages, endorsementWarnings, getVatsimId, sendAuditLog = null }) {
   let warningInterval = null;
 
   async function sendDueEndorsementWarnings() {
@@ -284,9 +329,9 @@ function createEndorsementWarningService({ client, messages, endorsementWarnings
 
     let endorsements;
     try {
-      endorsements = await fetchSoloEndorsements();
+      endorsements = await fetchSoloEndorsements({ audit: sendAuditLog });
     } catch (err) {
-      console.warn(`Could not fetch VATNZ solo endorsements for warnings: ${summarizeError(err)}`);
+      log('warn', 'endorsements_fetch_failed', { purpose: 'expiry_warnings', error: err });
       return;
     }
 
@@ -309,13 +354,14 @@ function createEndorsementWarningService({ client, messages, endorsementWarnings
           await user.send({
             content: buildExpiryWarning(endorsement) || `Your solo endorsement for ${formatEndorsementScope(endorsement)} expires on ${endorsement.endDate}.`
           });
+          log('info', 'dm_sent', { userId: ownerId, reason: 'endorsement_expiry_warning', daysUntilExpiry: days });
           endorsementWarnings.set(key, {
             sentAt: new Date().toISOString(),
             daysUntilExpiry: days,
             endorsement: formatEndorsementScope(endorsement)
           });
         } catch (err) {
-          console.warn(`Could not send solo endorsement expiry warning to ${ownerId}:`, err?.message || err);
+          log('warn', 'dm_failed', { userId: ownerId, reason: 'endorsement_expiry_warning', error: err });
         }
       }
     }
@@ -323,9 +369,9 @@ function createEndorsementWarningService({ client, messages, endorsementWarnings
 
   function startEndorsementWarningScheduler() {
     if (warningInterval) return;
-    sendDueEndorsementWarnings().catch(err => console.warn('Solo endorsement warning check failed:', err?.message || err));
+    sendDueEndorsementWarnings().catch(err => log('warn', 'endorsement_warning_check_failed', { error: err }));
     warningInterval = setInterval(() => {
-      sendDueEndorsementWarnings().catch(err => console.warn('Solo endorsement warning check failed:', err?.message || err));
+      sendDueEndorsementWarnings().catch(err => log('warn', 'endorsement_warning_check_failed', { error: err }));
     }, ENDORSEMENT_WARNING_CHECK_MS);
   }
 
@@ -349,5 +395,6 @@ module.exports = {
   buildExpiryWarning,
   findMatchingSoloEndorsement,
   applySoloEndorsementOverride,
+  buildOverrideAuditEntry,
   createEndorsementWarningService
 };

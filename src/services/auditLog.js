@@ -1,4 +1,7 @@
+const fs = require('fs');
 const { EmbedBuilder } = require('discord.js');
+
+const { log } = require('../utils/log');
 
 const { cleanEmbedValue } = require('../utils/format');
 const {
@@ -16,10 +19,25 @@ function addAuditField(fields, name, value, inline = false) {
   fields.push({ name, value: cleanEmbedValue(value), inline });
 }
 
-function createAuditLogger({ getLogChannel, getBookingMessageLink }) {
+function createAuditLogger({ getLogChannel, getBookingMessageLink, auditFilePath = null }) {
+  // The local file is the master record; the log channel is a copy that admins can delete.
+  function appendAuditFile(entry) {
+    if (!auditFilePath) return;
+    try {
+      fs.appendFileSync(auditFilePath, `${JSON.stringify({ time: new Date().toISOString(), ...entry })}\n`);
+    } catch (error) {
+      log('error', 'audit_file_write_failed', { action: entry.action, error });
+    }
+  }
+
   async function sendAuditLog({ action, actorId = null, actorLabel = null, targetUserId = null, booking = null, reason = null, fields = [], color = '#2F3136' }) {
+    appendAuditFile({ action, actorId, actorLabel, targetUserId, reason, fields, booking });
+
     const logChannel = await getLogChannel();
-    if (!logChannel?.send) return;
+    if (!logChannel?.send) {
+      appendAuditFile({ action: 'Log Channel Post Failed', originalAction: action, error: 'Log channel not found' });
+      return;
+    }
 
     const embedFields = [];
     addAuditField(embedFields, 'Actor', actorLabel || formatAuditUser(actorId), true);
@@ -54,7 +72,8 @@ function createAuditLogger({ getLogChannel, getBookingMessageLink }) {
     try {
       await logChannel.send({ embeds: [embed] });
     } catch (err) {
-      console.warn('Could not send audit log:', err?.message || err);
+      log('error', 'audit_post_failed', { action, error: err });
+      appendAuditFile({ action: 'Log Channel Post Failed', originalAction: action, error: err?.message || String(err) });
     }
   }
 

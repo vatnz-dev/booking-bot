@@ -1,4 +1,5 @@
-const axios = require('axios');
+const { createHash } = require('node:crypto');
+const http = require('../utils/http');
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -14,11 +15,13 @@ const {
   EVENT_NOTIFICATION_LEAD_MS,
   EVENT_NOTIFICATIONS_ROLE_ID,
   LOG_CHANNEL_ID,
-  STAFF_ROLE_IDS,
   THUMBS_UP,
   sectorCodeMap
 } = require('../constants');
-const { cleanEmbedValue, summarizeError } = require('../utils/format');
+const { cleanEmbedValue } = require('../utils/format');
+const { REFUSALS } = require('./access');
+const { log } = require('../utils/log');
+const { runBookingMutation } = require('./bookingQueue');
 const {
   DateTime,
   bookingOverlapsEvent,
@@ -75,6 +78,7 @@ function parseVatnzIcsEvents(icsText) {
       continue;
     }
     if (line === 'END:VEVENT') {
+      if (current?.rejectedUrl && !current.url) log('warn', 'event_link_rejected', { uid: current.uid, link: current.rejectedUrl });
       if (current?.uid && current?.title && current?.startUtc?.isValid && current?.endUtc?.isValid) {
         eventsOut.push({
           uid: current.uid,
@@ -102,7 +106,9 @@ function parseVatnzIcsEvents(icsText) {
     if (prop === 'DTSTART') current.startUtc = parseIcsDate(value);
     if (prop === 'DTEND') current.endUtc = parseIcsDate(value);
     if (prop === 'ATTACH' || prop === 'URL') {
-      current.url = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+      const url = safeEventUrl(value);
+      if (url) current.url = url;
+      else current.rejectedUrl = value.slice(0, 200);
     }
     if (prop === 'CATEGORIES') current.categories = value.split(',').map(v => v.trim()).filter(Boolean);
   }
@@ -123,6 +129,24 @@ function compactEventState(eventData) {
 
 function eventStateKey(uid) {
   return Buffer.from(String(uid || 'unknown')).toString('base64url');
+}
+
+// Discord caps button IDs at 100 characters, so buttons carry a short hash of the calendar UID.
+function eventButtonKey(uid) {
+  return createHash('sha256').update(String(uid)).digest('base64url').slice(0, 22);
+}
+
+// Event links go into staff posts as markdown, so only plain https links on vatnz.net are kept.
+// The live feed leaves the scheme off ("www.vatnz.net/events/..."), so a missing scheme becomes https.
+function safeEventUrl(raw) {
+  const value = raw && !/^[a-z][a-z0-9+.-]*:/i.test(raw) ? `https://${raw}` : raw;
+  if (!/^https:\/\/[^\s()[\]<>]+$/i.test(value)) return null;
+  try {
+    const url = new URL(value);
+    return url.hostname === 'vatnz.net' || url.hostname.endsWith('.vatnz.net') ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function formatEventWindow(eventData) {
@@ -209,11 +233,13 @@ function buildEventEmbed(eventData, title = 'VATNZ Event') {
     )
     .setTimestamp();
 
-  if (eventData.url) {
-    embed.addFields({ name: 'Link', value: `[Open event](${eventData.url})`, inline: false });
+  // Checked again here: event state saved before links were validated can still hold one.
+  const url = safeEventUrl(eventData.url);
+  if (url) {
+    embed.addFields({ name: 'Link', value: `[Open event](${url})`, inline: false });
   }
   if (Array.isArray(eventData.categories) && eventData.categories.length > 0) {
-    embed.addFields({ name: 'Categories', value: eventData.categories.join(', '), inline: false });
+    embed.addFields({ name: 'Categories', value: cleanEmbedValue(eventData.categories.join(', ')), inline: false });
   }
   return embed;
 }
@@ -233,7 +259,7 @@ function formatController(ownerId) {
 }
 
 async function fetchVatnzEvents() {
-  const { data } = await axios.get(EVENT_CALENDAR_URL, { timeout: 15000 });
+  const { data } = await http.get(EVENT_CALENDAR_URL);
   return parseVatnzIcsEvents(data);
 }
 
@@ -250,7 +276,7 @@ function createEventThreadService({
   clearBookingReminderTimer = () => {},
   rescheduleMentorTimers,
   scheduleBookingReminder = () => {},
-  isStaffMember
+  access
 }) {
   let eventThreadCheckInterval = null;
 
@@ -304,9 +330,9 @@ function createEventThreadService({
     if (!thread?.setName || thread.name === desiredName) return;
 
     try {
-      await thread.setName(desiredName, `VATNZ event title update for ${eventData.title}`);
+      await thread.setName(desiredName, `VATNZ event title update for ${String(eventData.title).slice(0, 400)}`);
     } catch (err) {
-      console.warn(`Could not update event thread name ${thread.id}:`, err?.message || err);
+      log('warn', 'event_thread_rename_failed', { threadId: thread.id, error: err });
     }
   }
 
@@ -319,7 +345,7 @@ function createEventThreadService({
       const promptMessage = await channel.messages.fetch(state.promptMessageId);
       await promptMessage.edit({ content, components: [] });
     } catch (err) {
-      console.warn(`Could not update event prompt ${state.promptMessageId}:`, err?.message || err);
+      log('warn', 'event_prompt_update_failed', { messageId: state.promptMessageId, error: err });
     }
   }
 
@@ -332,17 +358,17 @@ function createEventThreadService({
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`event_thread_create:${eventData.uid}`)
+        .setCustomId(`event_thread_create:${eventButtonKey(eventData.uid)}`)
         .setLabel('Create thread')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
-        .setCustomId(`event_thread_decline:${eventData.uid}`)
+        .setCustomId(`event_thread_decline:${eventButtonKey(eventData.uid)}`)
         .setLabel('Decline')
         .setStyle(ButtonStyle.Secondary)
     );
 
     const promptMessage = await logChannel.send({
-      content: [...STAFF_ROLE_IDS.map(id => `<@&${id}>`), 'Event thread check required.'].join(' '),
+      content: [...access.mentions('event-prompt'), 'Event thread check required.'].join(' '),
       embeds: [buildEventEmbed(eventData, 'Create Event Thread?')],
       components: [row]
     });
@@ -412,7 +438,7 @@ function createEventThreadService({
 
     const embed = new EmbedBuilder()
       .setColor('#0057B8')
-      .setTitle(`${eventData.title} Coverage`)
+      .setTitle(`${String(eventData.title).slice(0, 240)} Coverage`)
       .addFields(
         { name: 'Event Starts', value: startValue, inline: false },
         { name: 'Airports With Control', value: cleanEmbedValue(coverage.airports), inline: false },
@@ -420,8 +446,9 @@ function createEventThreadService({
       )
       .setTimestamp();
 
-    if (eventData.url) {
-      embed.addFields({ name: 'Event Link', value: `[Open event](${eventData.url})`, inline: false });
+    const url = safeEventUrl(eventData.url);
+    if (url) {
+      embed.addFields({ name: 'Event Link', value: `[Open event](${url})`, inline: false });
     }
 
     return embed;
@@ -517,7 +544,7 @@ function createEventThreadService({
         updatedState.notificationDeletedAt = new Date().toISOString();
       }
       setEventThreadState(state.event.uid, updatedState);
-      console.warn(`Could not update event coverage notification ${state.notificationMessageId}:`, err?.message || err);
+      log('warn', 'event_coverage_update_failed', { messageId: state.notificationMessageId, error: err });
       return false;
     }
   }
@@ -571,9 +598,10 @@ function createEventThreadService({
       try {
         const message = await channel.messages.fetch(state.notificationMessageId);
         await message.delete();
+        log('info', 'message_deleted', { messageId: state.notificationMessageId, reason: 'event_finished' });
       } catch (err) {
         if (err?.code !== 10008) {
-          console.warn(`Could not delete event coverage notification ${state.notificationMessageId}:`, err?.message || err);
+          log('warn', 'event_coverage_delete_failed', { messageId: state.notificationMessageId, error: err });
           eventThreads.set(uid, {
             ...retryState,
             notificationDeleteError: err?.message || String(err)
@@ -601,7 +629,11 @@ function createEventThreadService({
     }
   }
 
-  async function moveBookingsIntoEventThread(eventData, thread) {
+  function moveBookingsIntoEventThread(eventData, thread) {
+    return runBookingMutation(() => moveBookings(eventData, thread));
+  }
+
+  async function moveBookings(eventData, thread) {
     const moved = [];
     const rawDB = messages.all();
 
@@ -630,9 +662,9 @@ function createEventThreadService({
         }
 
         if (oldMessage) {
-          await oldMessage.delete().catch(err => {
-            console.warn(`Could not delete moved booking message ${oldMessageId}:`, err?.message || err);
-          });
+          await oldMessage.delete()
+            .then(() => log('info', 'message_deleted', { messageId: oldMessageId, reason: 'moved_to_thread' }))
+            .catch(err => log('warn', 'booking_message_delete_failed', { messageId: oldMessageId, reason: 'moved_to_thread', error: err }));
         }
 
         clearMentorTimers(oldMessageId);
@@ -701,7 +733,7 @@ function createEventThreadService({
       name: buildEventThreadName(eventData),
       autoArchiveDuration: 1440,
       type: ChannelType.PublicThread,
-      reason: `VATNZ event thread for ${eventData.title}`
+      reason: `VATNZ event thread for ${String(eventData.title).slice(0, 400)}`
     });
 
     await thread.send({ embeds: [buildEventEmbed(eventData, 'Event Booking Thread')] });
@@ -784,10 +816,11 @@ function createEventThreadService({
       const thread = await fetchDiscordChannel(state.threadId, 'finished event thread');
       if (thread?.delete) {
         try {
-          await thread.delete(`VATNZ event finished more than 1 hour ago: ${state.event.title}`);
+          await thread.delete(`VATNZ event finished more than 1 hour ago: ${String(state.event.title).slice(0, 400)}`);
           deleted = true;
+          log('info', 'message_deleted', { threadId: state.threadId, reason: 'event_thread_finished' });
         } catch (err) {
-          console.warn(`Could not delete finished event thread ${state.threadId}:`, err?.message || err);
+          log('warn', 'event_thread_delete_failed', { threadId: state.threadId, error: err });
           updatedState.status = 'delete_failed';
           updatedState.deleteError = err?.message || String(err);
         }
@@ -814,8 +847,10 @@ function createEventThreadService({
   }
 
   async function handleEventThreadButton(interaction) {
-    if (!isStaffMember(interaction.member)) {
-      await interaction.reply({ content: 'You do not have permission to manage event threads.', ephemeral: true });
+    const permission = access.can('event-thread', interaction.member);
+    if (permission !== 'ok') {
+      await interaction.reply({ content: REFUSALS[permission], ephemeral: true });
+      await sendAuditLog({ action: 'Action Refused', actorId: interaction.user?.id, reason: REFUSALS[permission], fields: [{ name: 'Action', value: 'event-thread', inline: true }], color: '#D9534F' });
       return;
     }
 
@@ -823,10 +858,12 @@ function createEventThreadService({
     const declinePrefix = 'event_thread_decline:';
     const isCreate = interaction.customId.startsWith(createPrefix);
     const isDecline = interaction.customId.startsWith(declinePrefix);
-    const uid = isCreate
+    const key = isCreate
       ? interaction.customId.slice(createPrefix.length)
       : interaction.customId.slice(declinePrefix.length);
-    const state = getEventThreadState(uid);
+    // Prompts posted before button keys were hashed carry the raw UID.
+    const state = eventThreads.all().map(entry => entry.data).find(s => s?.event?.uid && eventButtonKey(s.event.uid) === key)
+      || getEventThreadState(key);
     const eventData = state?.event;
 
     if (!eventData || (!isCreate && !isDecline)) {
@@ -840,7 +877,7 @@ function createEventThreadService({
         const result = await createEventThreadForEvent(eventData, { actorId: interaction.user.id, source: 'staff' });
         await interaction.editReply({ content: `Event thread ready: <#${result.thread.id}>.` });
       } catch (err) {
-        console.error('Could not create event thread:', err);
+        log('error', 'event_thread_create_failed', { error: err });
         await interaction.editReply({ content: 'Could not create the event thread. Check bot permissions and channel access.' });
       }
       return;
@@ -853,7 +890,7 @@ function createEventThreadService({
       declinedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    setEventThreadState(uid, updatedState);
+    setEventThreadState(eventData.uid, updatedState);
     await interaction.message.edit({ components: [] }).catch(() => {});
     await interaction.reply({ content: `Declined event thread for ${eventData.title}.`, ephemeral: true });
     await sendAuditLog({
@@ -877,42 +914,49 @@ function createEventThreadService({
       .sort((a, b) => (getEventDateTimes(a)?.startNz?.toMillis() || 0) - (getEventDateTimes(b)?.startNz?.toMillis() || 0));
 
     for (const eventData of upcoming) {
-      let existing = getEventThreadState(eventData.uid);
-      await postEventCoverageNotification(eventData);
-      existing = getEventThreadState(eventData.uid);
-
-      if (existing?.status === 'created' && existing.threadId) {
-        setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
-        const thread = await fetchDiscordChannel(existing.threadId, 'event thread');
-        if (thread) {
-          await ensureEventThreadName(thread, eventData);
-          await moveBookingsIntoEventThread(eventData, thread);
-        }
-        continue;
+      try {
+        await processUpcomingEvent(eventData);
+      } catch (err) {
+        log('warn', 'calendar_event_skipped', { uid: eventData.uid, title: eventData.title, error: err });
       }
-
-      if (isChristchurchControlEvent(eventData)) {
-        if (existing?.status !== 'created') {
-          await createEventThreadForEvent(eventData, { source: 'auto' });
-        }
-        continue;
-      }
-
-      if (existing?.status === 'declined') continue;
-      if (existing?.status === 'prompted') {
-        setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
-        continue;
-      }
-
-      await postEventThreadPrompt(eventData);
     }
+  }
+
+  async function processUpcomingEvent(eventData) {
+    await postEventCoverageNotification(eventData);
+    const existing = getEventThreadState(eventData.uid);
+
+    if (existing?.status === 'created' && existing.threadId) {
+      setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
+      const thread = await fetchDiscordChannel(existing.threadId, 'event thread');
+      if (thread) {
+        await ensureEventThreadName(thread, eventData);
+        await moveBookingsIntoEventThread(eventData, thread);
+      }
+      return;
+    }
+
+    if (isChristchurchControlEvent(eventData)) {
+      if (existing?.status !== 'created') {
+        await createEventThreadForEvent(eventData, { source: 'auto' });
+      }
+      return;
+    }
+
+    if (existing?.status === 'declined') return;
+    if (existing?.status === 'prompted') {
+      setEventThreadState(eventData.uid, { ...existing, event: compactEventState(eventData), updatedAt: new Date().toISOString() });
+      return;
+    }
+
+    await postEventThreadPrompt(eventData);
   }
 
   function startEventThreadScheduler() {
     if (eventThreadCheckInterval) return;
-    checkVatnzEventThreads().catch(err => console.warn(`Event thread check failed: ${summarizeError(err)}`));
+    checkVatnzEventThreads().catch(err => log('warn', 'event_thread_check_failed', { error: err }));
     eventThreadCheckInterval = setInterval(() => {
-      checkVatnzEventThreads().catch(err => console.warn(`Event thread check failed: ${summarizeError(err)}`));
+      checkVatnzEventThreads().catch(err => log('warn', 'event_thread_check_failed', { error: err }));
     }, EVENT_CHECK_INTERVAL_MS);
   }
 
@@ -955,5 +999,7 @@ module.exports = {
   eventTitleIncludesStartDate,
   buildEventThreadName,
   buildEventEmbed,
+  safeEventUrl,
+  eventButtonKey,
   getDiscordTimestamp
 };
