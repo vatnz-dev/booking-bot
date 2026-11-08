@@ -6,6 +6,7 @@ const { DateTime, NZ_ZONE, convertToUTC } = require('../src/utils/time');
 const stub = (path, exports) => { require.cache[require.resolve(path)] = { exports, loaded: true }; };
 const date = DateTime.now().setZone(NZ_ZONE).plus({ days: 7 }).toFormat('dd/MM');
 let validation, eligibility, validateHook, trafficCalls;
+stub('../src/utils/http', { get: async () => ({ data: '' }) }); // empty VATNZ calendar for the booking limits
 stub('../src/services/positions', {
   validateVatnzPosition: async () => { if (validateHook) await validateHook(); return validation; },
   evaluateBookingEligibility: () => eligibility

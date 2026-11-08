@@ -53,6 +53,7 @@ const {
 const { validateVatnzPosition, validateVatnzEventPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
 const { runBookingMutation } = require('../services/bookingQueue');
+const { bookingLimitRefusal, mentorRequestRefusal } = require('../services/limits');
 const { formatOpenDate, describeOpenDates, readPosition, writePosition, parseOpenDate, matchOpenDates, eventPositionRefusal, deleteAnnouncement } = require('../services/eventPositions');
 // const { sendBooking, deleteVatsimBooking } = require('../services/vatsim');
 const {
@@ -620,6 +621,8 @@ function createInteractionHandlers({
           ephemeral: true
         });
       }
+      const limitRefusal = await bookingLimitRefusal({ candidate: bookingDisplayRecord, others: messages.get(userId) || [] });
+      if (limitRefusal) return i.editReply({ content: `❌ ${limitRefusal}`, ephemeral: true });
       const isCTR = pos.endsWith("_CTR") && pos !== "NZAA-R_CTR";
       const extendedSectors = isCTR ? [...(autoInheritanceMap[pos] || [])] : [];
       const newBookingSectors = [pos, ...extendedSectors];
@@ -1161,6 +1164,22 @@ function createInteractionHandlers({
 
     const booking = userBookings[selectedIndex];
 
+    // One request per booking per cooldown, whichever mentor is tagged, so /mentor can't be used to spam DMs.
+    const cooldownRefusal = mentorRequestRefusal(booking);
+    if (cooldownRefusal) {
+      await interaction.editReply({ content: `❌ ${cooldownRefusal}`, components: [] });
+      await sendAuditLog({
+        action: 'Mentor Request Refused',
+        actorId: userId,
+        targetUserId: userId,
+        booking,
+        reason: cooldownRefusal,
+        fields: [{ name: 'Tagged', value: `<@${mentorId}> (${mentorId})`, inline: true }],
+        color: '#D9534F'
+      });
+      return;
+    }
+
     let messageLink = '';
     try {
       const s4dmessage = await fetchBookingMessage(booking);
@@ -1200,6 +1219,7 @@ function createInteractionHandlers({
     booking.mentorId = mentorId;
     booking.mentorApproved = false;
     booking.mentorTaggedAt = new Date().toISOString();
+    booking.mentorRequestedAt = booking.mentorTaggedAt;
     messages.set(userId, userBookings);
     await sendAuditLog({
       action: 'Mentor Tagged Booking',

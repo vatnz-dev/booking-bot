@@ -114,6 +114,9 @@ I1_ROLE_ID=your_i1_role_id_here
 I3_ROLE_ID=your_i3_role_id_here
 BOOKING_REMINDERS_ENABLED=true
 BOOKING_REMINDER_MINUTES=30
+MAX_ACTIVE_BOOKINGS=3
+MAX_BOOKING_DAYS_AHEAD=14
+MENTOR_REQUEST_COOLDOWN_HOURS=3
 EVENT_CALENDAR_URL=https://www.vatnz.net/events/calendar/vatnz-lite.ics
 VATNZ_POSITIONS_URL=https://www.vatnz.net/airspace/positions/
 SOLO_ENDORSEMENTS_URL=https://www.vatnz.net/controllers/endorsements/approved-solo-endorsements/
@@ -229,6 +232,12 @@ Before upgrading an existing container, stop it and copy its six root JSON files
 Event-only positions close automatically the day after each open date (NZ time), and the announcement is deleted. Bookings must match an open date, year included. Every booking of an event-only position is audited as "Event Position Booked".
 
 Bookings shorter than 30 minutes are rejected.
+Booking limits, set in `.env` (restart to apply; the values in use are in the startup log):
+- `MAX_ACTIVE_BOOKINGS` (default 3): normal bookings a controller can hold that haven't ended. Event bookings don't count.
+- `MAX_BOOKING_DAYS_AHEAD` (default 14): how far ahead a normal booking can start.
+- Event bookings: a booking that overlaps an event in the VATNZ calendar, even partly, is an event booking. Each controller can hold one per event, and only for the next upcoming event. If the calendar can't be read, the last copy is used; with none, every booking counts as a normal booking.
+- `MENTOR_REQUEST_COOLDOWN_HOURS` (default 3): one `/mentor` request per booking in this time, whichever mentor is tagged. Editing a booking resets it, since the edit asks for a new mentor tag.
+- Edits follow the same limits, including staff edits of another controller's booking. An edit that keeps its date and times is never refused for being too far ahead, and editing a normal booking never counts against the cap, so bookings made before the limits stay editable.
 New bookings must start in the future. Both endpoints use the same NZ calendar date and year. An active booking may still be edited on its existing date, provided its end remains in the future.
 Controllers cannot create overlapping bookings, even at different positions or in different event threads. Main, inherited and optional sectors are checked together; a new booking cannot take coverage from another booking. Back-to-back bookings are allowed.
 Pending mentor tag and approval deadlines are restored after a restart using their original timestamps; overdue deadlines run promptly instead of receiving a fresh grace period.

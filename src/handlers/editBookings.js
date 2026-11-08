@@ -5,6 +5,7 @@ const { parseDdMm, parseHhmm, getDurationMinutes, resolveBookingWindow, formatBo
 const { getControllerRatingLabel } = require('../utils/controllerRating');
 const { cleanEmbedValue } = require('../utils/format');
 const { eventPositionRefusal } = require('../services/eventPositions');
+const { bookingLimitRefusal } = require('../services/limits');
 const { findOverlappingBooking } = require('../utils/bookingConflicts');
 const { validateVatnzPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
@@ -133,6 +134,9 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
           if (occupied) return fail(`${occupied} is already booked or extended into by <@${key}> ${formatBookingWindowForDiscord(other)}. Choose a different time, position or extra sectors.`);
         }
       }
+      const ownOthers = (messages.get(session.ownerId) || []).filter(b => b.messageId !== before.messageId);
+      const limitRefusal = await bookingLimitRefusal({ candidate, others: ownOthers, previous: before });
+      if (limitRefusal) return fail(limitRefusal);
 
       const match = await findMatchingEventThreadForBooking(candidate);
       const channel = match?.thread || await getBookingChannel();
@@ -143,7 +147,8 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
       const solo = eligibility.soloEndorsement;
       Object.assign(candidate, {
         mentorRequired: eligibility.mentorRequired === true, mentorId: null, mentorApproved: false,
-        mentorTaggedAt: null, mentorApprovedAt: null, awaitingExtensionSelection: false,
+        // The edit asks for /mentor again within 5 minutes, so the request cooldown restarts with it.
+        mentorTaggedAt: null, mentorRequestedAt: null, mentorApprovedAt: null, awaitingExtensionSelection: false,
         mentorTagRequestedAt: new Date().toISOString(),
         reminderSentAt: null, reminderMinutes: null, updatedAt: new Date().toISOString(),
         threadId: match?.thread?.id || null, eventUid: match?.state?.event?.uid || null,

@@ -90,6 +90,21 @@ test('a booking moved into an event thread is still found by an older menu', asy
   assert.deepEqual(messages.data.get('sam'), []);
 });
 
+test('a repeat mentor request within 3 hours is refused and logged; the first is saved on the booking', async () => {
+  const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const messages = store({ sam: [booking('m-ch', 'NZCH_GND', '14/11', { mentorRequestedAt: hourAgo }), booking('m-aa', 'NZAA_TWR', '12/11')] });
+  const audits = [];
+  const h = handlers(messages, audits);
+  assert.match(await choose(h, samMember, 'm-ch|jordan', 'handleMentorBookingSelect'), /another mentor request for this booking after/);
+  assert.equal(messages.data.get('sam')[0].mentorId, undefined, 'Jordan is not tagged');
+  assert.equal(audits.at(-1).action, 'Mentor Request Refused');
+
+  await choose(h, samMember, 'm-aa|jordan', 'handleMentorBookingSelect');
+  const tagged = messages.data.get('sam')[1];
+  assert.equal(tagged.mentorId, 'jordan');
+  assert.ok(Date.parse(tagged.mentorRequestedAt) > Date.now() - 5000, 'the request time is stored with the booking');
+});
+
 test('menus page past 25 bookings', async () => {
   const thirty = Array.from({ length: 30 }, (_, i) => booking(`m-${i}`, `NZAA_TWR`, `${String(i + 1).padStart(2, '0')}/12`));
   const messages = store({ sam: thirty });
