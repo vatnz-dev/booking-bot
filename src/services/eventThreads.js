@@ -21,6 +21,7 @@ const {
 const { cleanEmbedValue } = require('../utils/format');
 const { REFUSALS } = require('./access');
 const { log } = require('../utils/log');
+const { runBookingMutation } = require('./bookingQueue');
 const {
   DateTime,
   bookingOverlapsEvent,
@@ -627,7 +628,11 @@ function createEventThreadService({
     }
   }
 
-  async function moveBookingsIntoEventThread(eventData, thread) {
+  function moveBookingsIntoEventThread(eventData, thread) {
+    return runBookingMutation(() => moveBookings(eventData, thread));
+  }
+
+  async function moveBookings(eventData, thread) {
     const moved = [];
     const rawDB = messages.all();
 

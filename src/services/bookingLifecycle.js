@@ -11,6 +11,7 @@ const {
 } = require('../constants');
 const { getMentorRefusal } = require('../utils/permissions');
 const { log, logFailures } = require('../utils/log');
+const { runBookingMutation } = require('./bookingQueue');
 const {
   DateTime,
   buildNzDateTime,
@@ -81,7 +82,7 @@ function createBookingLifecycle({
 
   function scheduleExtensionSelectionTimeout(ownerId, messageId) {
     clearExtensionSelectionTimer(messageId);
-    const timeout = setTimeout(logFailures('extension_selection_timeout', { messageId }, async () => {
+    const timeout = setTimeout(logFailures('extension_selection_timeout', { messageId }, () => runBookingMutation(async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking) return;
       if (!entry.booking.awaitingExtensionSelection) return;
@@ -107,7 +108,7 @@ function createBookingLifecycle({
       } catch (err) {
         log('warn', 'dm_failed', { userId: ownerId, reason: 'extension_fallback', error: err });
       }
-    }), 3 * 60 * 1000);
+    })), 3 * 60 * 1000);
 
     extensionSelectionTimeouts.set(messageId, timeout);
   }
@@ -152,7 +153,7 @@ function createBookingLifecycle({
 
   function scheduleMentorTagTimeout(ownerId, messageId, delayMs = MENTOR_TAG_TIMEOUT_MS) {
     clearMentorTimers(messageId);
-    const timeout = setTimeout(logFailures('mentor_tag_timeout', { messageId }, async () => {
+    const timeout = setTimeout(logFailures('mentor_tag_timeout', { messageId }, () => runBookingMutation(async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking.mentorRequired) return;
       if (entry.booking.mentorId) return;
@@ -163,7 +164,7 @@ function createBookingLifecycle({
         auditAction: 'Mentor Tag Timeout Auto-Delete',
         auditReason: 'Controller did not tag a mentor within 5 minutes'
       });
-    }), Math.max(1000, delayMs));
+    })), Math.max(1000, delayMs));
     mentorTagTimeouts.set(messageId, timeout);
   }
 
@@ -171,7 +172,7 @@ function createBookingLifecycle({
     const existing = mentorApprovalTimeouts.get(messageId);
     if (existing) clearTimeout(existing);
 
-    const timeout = setTimeout(logFailures('mentor_approval_timeout', { messageId }, async () => {
+    const timeout = setTimeout(logFailures('mentor_approval_timeout', { messageId }, () => runBookingMutation(async () => {
       const entry = findBookingByMessageId(messageId);
       if (!entry || !entry.booking.mentorRequired) return;
       if (entry.booking.mentorApproved) return;
@@ -182,7 +183,7 @@ function createBookingLifecycle({
         auditAction: 'Mentor Approval Timeout Auto-Delete',
         auditReason: 'Mentor did not approve within 30 minutes'
       });
-    }), Math.max(1000, delayMs));
+    })), Math.max(1000, delayMs));
     mentorApprovalTimeouts.set(messageId, timeout);
   }
 
@@ -272,7 +273,7 @@ function createBookingLifecycle({
         return;
       }
 
-      sendBookingReminder(ownerId, booking.messageId).catch(err => {
+      runBookingMutation(() => sendBookingReminder(ownerId, booking.messageId)).catch(err => {
         log('warn', 'booking_reminder_failed', { messageId: booking.messageId, error: err });
       });
     }, cappedDelayMs);
@@ -335,7 +336,11 @@ function createBookingLifecycle({
     await sendAuditLog({ action: auditAction, actorId: approverId, targetUserId: entry.ownerId, booking, reason, color: '#3BA55D' });
   }
 
-  async function handleMentorApprovalReaction(reaction, user) {
+  function handleMentorApprovalReaction(reaction, user) {
+    return runBookingMutation(() => approveFromReaction(reaction, user));
+  }
+
+  async function approveFromReaction(reaction, user) {
     try {
       if (user.bot) return;
       if (reaction.partial) await reaction.fetch();
@@ -441,9 +446,9 @@ function createBookingLifecycle({
   function startBookingCleanupScheduler() {
     if (bookingCleanupInterval) return;
     rescheduleAllBookingReminders();
-    cleanupExpiredBookings().catch(err => log('warn', 'booking_cleanup_failed', { error: err }));
+    runBookingMutation(cleanupExpiredBookings).catch(err => log('warn', 'booking_cleanup_failed', { error: err }));
     bookingCleanupInterval = setInterval(() => {
-      cleanupExpiredBookings().catch(err => log('warn', 'booking_cleanup_failed', { error: err }));
+      runBookingMutation(cleanupExpiredBookings).catch(err => log('warn', 'booking_cleanup_failed', { error: err }));
     }, ONE_HOUR_MS);
   }
 

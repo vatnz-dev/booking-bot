@@ -52,6 +52,7 @@ const {
 } = require('../services/traffic');
 const { validateVatnzPosition, validateVatnzEventPosition, evaluateBookingEligibility } = require('../services/positions');
 const { getVatsimId } = require('../services/vatsim');
+const { runBookingMutation } = require('../services/bookingQueue');
 const { formatOpenDate, describeOpenDates, readPosition, writePosition, parseOpenDate, matchOpenDates, eventPositionRefusal, deleteAnnouncement } = require('../services/eventPositions');
 // const { sendBooking, deleteVatsimBooking } = require('../services/vatsim');
 const {
@@ -149,14 +150,6 @@ function createInteractionHandlers({
   }
 
   const buttonCooldowns = new Map();
-  // Serialize booking changes across controllers, including async Discord sends,
-  // so a second submission sees the first submission's committed sectors.
-  let bookingMutation = Promise.resolve();
-  function runBookingMutation(action) {
-    const next = bookingMutation.then(action);
-    bookingMutation = next.catch(() => {});
-    return next;
-  }
   const editHandlers = createEditBookingHandlers({ client, messages, event, isBookingModerator, getBookingChannel, fetchBookingMessage, sendAuditLog, eventThreadService, bookingLifecycle, runBookingMutation });
   const {
     clearMentorTimers,
@@ -261,24 +254,70 @@ function createInteractionHandlers({
       return;
     }
 
-    const options = userBookings.slice(0, 25).map((b, index) => ({
-      label: `${b.position} on ${b.date} at ${b.start}`,
-      description: `Ends at ${b.end}`,
-      value: `${targetUserId}|${index}`
-    }));
-
-    const row = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId('delete_booking_select')
-        .setPlaceholder('Select a booking to delete')
-        .addOptions(options)
-    );
-
     await interaction.reply({
       content: targetUserId === userId ? '\u{1F5D1}\uFE0F Select a booking to delete:' : `\u{1F5D1}\uFE0F Select a booking to delete for <@${targetUserId}>:`,
-      components: [row],
+      components: deleteMenuRows(targetUserId, userBookings, 0),
       ephemeral: true
     });
+  }
+
+  // Menus name a booking by its message ID, never its place in the list, and page past Discord's 25 options.
+  function bookingMenuRows({ bookings, page, menuId, pageId, placeholder, value }) {
+    const pages = Math.max(1, Math.ceil(bookings.length / 25));
+    const current = Math.min(Math.max(0, page), pages - 1);
+    const options = bookings.slice(current * 25, current * 25 + 25).map(b => ({
+      label: `${b.position} on ${b.date} at ${b.start}`.slice(0, 100),
+      description: `Ends at ${b.end}`,
+      value: value(b)
+    }));
+    const rows = [new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder().setCustomId(menuId).setPlaceholder(placeholder).addOptions(options)
+    )];
+    if (pages > 1) {
+      rows.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`${pageId}:${current - 1}`).setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(current === 0),
+        new ButtonBuilder().setCustomId(`${pageId}:${current + 1}`).setLabel(`Next (page ${current + 1} of ${pages})`).setStyle(ButtonStyle.Secondary).setDisabled(current === pages - 1)
+      ));
+    }
+    return rows;
+  }
+
+  function deleteMenuRows(ownerId, bookings, page) {
+    return bookingMenuRows({
+      bookings, page, menuId: 'delete_booking_select', pageId: `delete_booking_page:${ownerId}`,
+      placeholder: 'Select a booking to delete', value: b => `${ownerId}|${b.messageId}`
+    });
+  }
+
+  function mentorMenuRows(mentorId, bookings, page) {
+    return bookingMenuRows({
+      bookings, page, menuId: 'mentor_booking_select', pageId: `mentor_booking_page:${mentorId}`,
+      placeholder: 'Select a booking to notify your mentor', value: b => `${b.messageId}|${mentorId}`
+    });
+  }
+
+  // A booking moved into an event thread gets a new message ID; menus opened earlier hold the old one.
+  function findBookingIndex(bookings, messageId) {
+    return Array.isArray(bookings)
+      ? bookings.findIndex(b => b.messageId === messageId || b.previousMessageIds?.includes(messageId))
+      : -1;
+  }
+
+  async function handleBookingMenuPage(interaction) {
+    const [kind, id, page] = interaction.customId.split(':');
+    const userId = interaction.user.id;
+    if (kind === 'delete_booking_page' && id !== userId && !isBookingModerator(interaction.member)) {
+      await refuse(interaction, 'You can only delete your own bookings.');
+      return;
+    }
+    const ownerId = kind === 'delete_booking_page' ? id : userId;
+    const bookings = messages.get(ownerId);
+    if (!Array.isArray(bookings) || !bookings.length) {
+      await interaction.update({ content: '\u{1F4ED} No bookings left.', components: [] });
+      return;
+    }
+    const rows = kind === 'delete_booking_page' ? deleteMenuRows(ownerId, bookings, Number(page)) : mentorMenuRows(id, bookings, Number(page));
+    await interaction.update({ components: rows });
   }
 
   async function handleExpectedTraffic(interaction) {
@@ -392,10 +431,7 @@ function createInteractionHandlers({
 
   async function deleteBookingSelection(interaction) {
     const userId = String(interaction.member.user.id);
-    const [targetUserFromValue, selectedIndexFromValue] = String(interaction.values[0]).includes('|')
-      ? interaction.values[0].split('|')
-      : [userId, interaction.values[0]];
-    const selectedIndex = parseInt(selectedIndexFromValue, 10);
+    const [targetUserFromValue, messageId] = String(interaction.values[0]).split('|');
     const targetUserId = String(targetUserFromValue);
     if (targetUserId !== userId && !isBookingModerator(interaction.member)) {
       await refuse(interaction, 'You can only delete your own bookings.', { deferred: true });
@@ -403,12 +439,9 @@ function createInteractionHandlers({
     }
 
     const userBookings = messages.get(targetUserId);
-
-    if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
-      await interaction.editReply({
-        content: '\u274C Booking not found.',
-        components: []
-      });
+    const selectedIndex = findBookingIndex(userBookings, messageId);
+    if (selectedIndex === -1) {
+      await interaction.editReply({ content: '\u274C That booking no longer exists.', components: [] });
       return;
     }
 
@@ -1113,16 +1146,16 @@ function createInteractionHandlers({
 
   async function handleMentorBookingSelect(interaction) {
     await interaction.deferUpdate();
+    return runBookingMutation(() => mentorBookingSelection(interaction));
+  }
 
-    const [selectedIndex, mentorId] = interaction.values[0].split('|');
+  async function mentorBookingSelection(interaction) {
+    const [messageId, mentorId] = interaction.values[0].split('|');
     const userId = String(interaction.member.user.id);
     const userBookings = messages.get(userId);
-
-    if (!Array.isArray(userBookings) || !userBookings[selectedIndex]) {
-      await interaction.editReply({
-        content: '\u274C Booking not found.',
-        components: []
-      });
+    const selectedIndex = findBookingIndex(userBookings, messageId);
+    if (selectedIndex === -1) {
+      await interaction.editReply({ content: '\u274C That booking no longer exists.', components: [] });
       return;
     }
 
@@ -1233,22 +1266,9 @@ function createInteractionHandlers({
       return;
     }
 
-    const options = userBookings.map((b, index) => ({
-      label: `${b.position} on ${b.date} at ${b.start}`,
-      description: `Ends at ${b.end}`,
-      value: `${index}|${mentor.id}`
-    }));
-
-    const row = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId('mentor_booking_select')
-        .setPlaceholder(`Select a booking to notify ${mentor.user.username}`)
-        .addOptions(options)
-    );
-
     await interaction.reply({
       content: `\u{1F468}\u200D\u{1F3EB} Select the booking you want to notify **${mentor.user.username}** about:`,
-      components: [row],
+      components: mentorMenuRows(mentor.id, userBookings, 0),
       ephemeral: true
     });
   }
@@ -1400,6 +1420,10 @@ function createInteractionHandlers({
             await handleEventThreadButton(interaction);
             return;
           }
+          if (/^(delete|mentor)_booking_page:/.test(interaction.customId)) {
+            await handleBookingMenuPage(interaction);
+            return;
+          }
 
           switch (interaction.customId) {
             case 'plan':
@@ -1483,6 +1507,7 @@ function createInteractionHandlers({
     handleExtendSectorSelect,
     handleCloseEventPosition,
     handleMentorBookingSelect,
+    handleBookingMenuPage,
     handleMentor,
     handleMaintenance,
     handleApproveBookingCommand,
