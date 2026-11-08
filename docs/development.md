@@ -52,7 +52,9 @@ Run the tests with `npm test`. The tests use `node:test` and stubs, and need no 
 
 ## Releases
 
-Each push to `main` runs semantic-release. It uses the Conventional Commits in the push:
+`next` holds the next release. Merge work into `next`, then merge `next` into `main` to release. After each release, merge `main` back into `next`.
+
+Each push to `main` or `next` runs semantic-release. It uses the Conventional Commits in the push:
 
 | Commit type                                                  | Release |
 | ------------------------------------------------------------ | ------- |
@@ -63,9 +65,11 @@ Each push to `main` runs semantic-release. It uses the Conventional Commits in t
 
 A release publishes the image to `ghcr.io/vatnz-dev/booking-bot` with the tags `vX.Y.Z`, `X.Y.Z`, `X.Y`, `X` and `latest`. A manual `vX.Y.Z` tag also publishes an image.
 
+On `next`, a release is a preview: a GitHub pre-release `vX.Y.Z-next.N` and an image tagged `vX.Y.Z-next.N`, `X.Y.Z-next.N` and `next`. Previews do not move `X.Y`, `X` or `latest`. Run the test bot on `:next`.
+
 Use `BREAKING CHANGE:` when a release needs changes to `.env` or `compose.yaml`. Deployments pin the major version, so this stops them from getting the change automatically.
 
-Pull requests run the tests. Dependabot opens weekly pull requests for GitHub Actions, the Docker base image and npm. Base-image and runtime-dependency updates use `fix(deps):`, so they make a patch release.
+Pull requests run the tests. Dependabot opens weekly pull requests against `next` for GitHub Actions, the Docker base image and npm. Base-image and runtime-dependency updates use `fix(deps):`, so they make a patch release. Security updates target `main` and do not get the `fix(deps):` prefix. Set it when you merge, or no release is made.
 
 ## Inactive code
 

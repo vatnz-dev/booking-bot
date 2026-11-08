@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - next
     tags:
       - "v*.*.*"
 
@@ -39,7 +40,9 @@ jobs:
         run: |
           npm run release
           git fetch --tags origin
-          tag="$(git tag --points-at "$GITHUB_SHA" --sort=-version:refname | head -n 1)"
+          # A fast-forward can leave a release and a preview tag on one commit; take this branch's kind.
+          if [[ "$GITHUB_REF_NAME" == next ]]; then filter='-next\.'; else filter='^v[0-9]+\.[0-9]+\.[0-9]+$'; fi
+          tag="$(git tag --points-at "$GITHUB_SHA" --sort=-version:refname | grep -E -- "$filter" | head -n 1 || true)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Select image tag
@@ -77,6 +80,7 @@ jobs:
             type=semver,pattern={{version}},value=${{ steps.image-tag.outputs.tag }}
             type=semver,pattern={{major}}.{{minor}},value=${{ steps.image-tag.outputs.tag }}
             type=semver,pattern={{major}},value=${{ steps.image-tag.outputs.tag }}
+            type=raw,value=next,enable=${{ github.ref_name == 'next' }}
 
       - name: Build and push image
         if: steps.image-tag.outputs.tag != ''
