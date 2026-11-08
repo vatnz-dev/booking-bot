@@ -354,6 +354,7 @@ function createEndorsementWarningService({ client, messages, endorsementWarnings
           await user.send({
             content: buildExpiryWarning(endorsement) || `Your solo endorsement for ${formatEndorsementScope(endorsement)} expires on ${endorsement.endDate}.`
           });
+          log('info', 'dm_sent', { userId: ownerId, reason: 'endorsement_expiry_warning', daysUntilExpiry: days });
           endorsementWarnings.set(key, {
             sentAt: new Date().toISOString(),
             daysUntilExpiry: days,

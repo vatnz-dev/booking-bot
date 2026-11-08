@@ -172,6 +172,7 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
       const posted = await channel.send({ embeds: [embed] });
       if (!resolve(token, interaction)) {
         await posted.delete();
+        log('info', 'message_deleted', { messageId: posted.id, reason: 'edit_superseded' });
         return fail('This booking changed while saving. Run /editbookings again.');
       }
       candidate.messageId = posted.id;
@@ -181,6 +182,7 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
       const bookings = messages.get(session.ownerId).map(b => b.messageId === before.messageId ? candidate : b);
       try { messages.set(session.ownerId, bookings); } catch (err) {
         await posted.delete();
+        log('info', 'message_deleted', { messageId: posted.id, reason: 'edit_save_failed' });
         throw err;
       }
       sessions.delete(token);
@@ -190,7 +192,10 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
       bookingLifecycle.scheduleBookingReminder(session.ownerId, candidate);
       if (candidate.mentorRequired) bookingLifecycle.scheduleMentorTagTimeout(session.ownerId, candidate.messageId);
       let cleanupWarning = '';
-      try { await oldMessage.delete(); } catch (err) {
+      try {
+        await oldMessage.delete();
+        log('info', 'message_deleted', { messageId: oldMessage.id, reason: 'booking_edited' });
+      } catch (err) {
         log('warn', 'edit_old_message_delete_failed', { error: err });
         cleanupWarning = '\nThe previous Discord post could not be removed; staff should remove it.';
       }
@@ -208,6 +213,7 @@ function createEditBookingHandlers({ client, messages, event, isBookingModerator
         try {
           const owner = await client.users.fetch(session.ownerId);
           await owner.send({ content: `Staff updated your booking to **${position}** ${formatBookingWindowForDiscord(candidate)}.${candidate.mentorRequired ? '\nMentor approval has been reset. Use /mentor to tag your mentor again within 5 minutes.' : ''}` });
+          log('info', 'dm_sent', { userId: session.ownerId, reason: 'staff_edit' });
         } catch (err) { log('warn', 'dm_failed', { reason: 'staff_edit', error: err }); }
       }
       await interaction.editReply({ content: `Booking updated: **${position}** ${formatBookingWindowForDiscord(candidate)}.${candidate.mentorRequired ? '\nMentor approval has been reset. Use /mentor to tag your mentor again within 5 minutes.' : ''}${cleanupWarning}` });

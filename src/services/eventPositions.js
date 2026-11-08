@@ -85,6 +85,7 @@ async function deleteAnnouncement(getBookingChannel, messageId) {
   try {
     const message = await channel?.messages?.fetch(messageId);
     await message?.delete();
+    if (message) log('info', 'message_deleted', { messageId, reason: 'event_position_closed' });
   } catch (err) {
     if (err?.code !== 10008) log('warn', 'event_position_message_delete_failed', { messageId, error: err });
   }

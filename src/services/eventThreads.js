@@ -598,6 +598,7 @@ function createEventThreadService({
       try {
         const message = await channel.messages.fetch(state.notificationMessageId);
         await message.delete();
+        log('info', 'message_deleted', { messageId: state.notificationMessageId, reason: 'event_finished' });
       } catch (err) {
         if (err?.code !== 10008) {
           log('warn', 'event_coverage_delete_failed', { messageId: state.notificationMessageId, error: err });
@@ -661,9 +662,9 @@ function createEventThreadService({
         }
 
         if (oldMessage) {
-          await oldMessage.delete().catch(err => {
-            log('warn', 'booking_message_delete_failed', { messageId: oldMessageId, reason: 'moved_to_thread', error: err });
-          });
+          await oldMessage.delete()
+            .then(() => log('info', 'message_deleted', { messageId: oldMessageId, reason: 'moved_to_thread' }))
+            .catch(err => log('warn', 'booking_message_delete_failed', { messageId: oldMessageId, reason: 'moved_to_thread', error: err }));
         }
 
         clearMentorTimers(oldMessageId);
@@ -817,6 +818,7 @@ function createEventThreadService({
         try {
           await thread.delete(`VATNZ event finished more than 1 hour ago: ${String(state.event.title).slice(0, 400)}`);
           deleted = true;
+          log('info', 'message_deleted', { threadId: state.threadId, reason: 'event_thread_finished' });
         } catch (err) {
           log('warn', 'event_thread_delete_failed', { threadId: state.threadId, error: err });
           updatedState.status = 'delete_failed';

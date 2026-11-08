@@ -463,7 +463,10 @@ function createInteractionHandlers({
 
     try {
       const messageToDelete = await fetchBookingMessage(booking);
-      if (messageToDelete) await messageToDelete.delete();
+      if (messageToDelete) {
+        await messageToDelete.delete();
+        log('info', 'message_deleted', { messageId: booking.messageId, reason: targetUserId === userId ? 'booking_deleted' : 'staff_deleted_booking' });
+      }
     } catch (err) {
       log('error', 'booking_message_delete_failed', { messageId: booking.messageId, error: err });
     }
@@ -1035,15 +1038,17 @@ function createInteractionHandlers({
         }
       }
 
-      let updated = false;
-
+      const added = [];
+      const taken = [];
       for (const selection of selections) {
         const [, sector] = selection.split('|');
-        if (!unavailable.has(sector) && !booking.extendedSectors.includes(sector)) {
+        if (unavailable.has(sector)) taken.push(sector);
+        else if (!booking.extendedSectors.includes(sector)) {
           booking.extendedSectors.push(sector);
-          updated = true;
+          added.push(sector);
         }
       }
+      const updated = added.length > 0;
 
       if (updated) {
         const msg = await fetchBookingMessage(booking);
@@ -1076,6 +1081,19 @@ function createInteractionHandlers({
       messages.set(userId, userBookings);
       if (updated) {
         await refreshEventCoverageNotificationsForBooking(booking);
+        const names = sectors => sectors.map(s => sectorCodeMap[s] || s).join(', ');
+        await sendAuditLog({
+          action: 'Sector Extensions Changed',
+          actorId: userId,
+          targetUserId: userId,
+          booking,
+          reason: 'Controller chose extra sectors after booking',
+          fields: [
+            { name: 'Added', value: names(added), inline: false },
+            ...(taken.length ? [{ name: 'Already taken, not added', value: names(taken), inline: false }] : [])
+          ],
+          color: '#00AEFF'
+        });
       }
 
       await interaction.editReply({ content: '\u2705 Extended sectors updated.', components: [] });
@@ -1249,6 +1267,7 @@ function createInteractionHandlers({
             : `${interaction.user.username} has booked **${booking.position}** ${getBookingWindowDisplay(booking)} and tagged you.`
         }]
       });
+      log('info', 'dm_sent', { userId: mentorId, reason: 'mentor_request', messageId: booking.messageId });
     } catch (err) {
       log('error', 'dm_failed', { userId: mentorId, reason: 'mentor_request', error: err });
     }

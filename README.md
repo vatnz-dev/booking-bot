@@ -275,6 +275,13 @@ The bot checks the VATNZ calendar feed on startup and every 5 minutes.
 - New overlapping bookings are posted directly into the event thread.
 - Event threads are deleted automatically 1 hour after the event end time.
 
+## Logging and Audit Trail
+
+- **Logs** go to stdout as one JSON line per event (`docker logs vatnz-booking-bot`): every interaction, outside request, DM sent (`dm_sent`, with recipient and reason), message deleted (`message_deleted`, with message ID and reason), and every failure.
+- **The audit trail** in `db/audit.jsonl` is the master record. Each entry is appended before it's posted to `LOG_CHANNEL_ID`, and a failed post is recorded there too. Back it up with the rest of `db/`.
+- **Crashes:** an unhandled error is logged with its stack trace and audited as "Unhandled Error". After a synchronous crash the bot waits up to 3 seconds for the log-channel post, then exits so Docker restarts it.
+- **Discord connection:** disconnects, reconnect attempts and resumes are logged (`discord_disconnected`, `discord_reconnecting`, `discord_resumed`). Reconnecting is automatic.
+
 ## Runtime Files
 
 The VATSIM ATC booking create/delete helpers and booking hooks are retained as commented-out code in `src/services/vatsim.js` and `src/handlers/interactions.js`. They do not make requests. Before enabling, configure the issued API authentication, replace the `TBC` division/subdivision values, and connect automatic deletions as well as manual deletions to the API.

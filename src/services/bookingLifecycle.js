@@ -105,6 +105,7 @@ function createBookingLifecycle({
         await user.send({
           content: `You dismissed the extension selection, so it was defaulted to no extra sectors.\n\n${traffic}`
         });
+        log('info', 'dm_sent', { userId: ownerId, reason: 'extension_fallback', messageId });
       } catch (err) {
         log('warn', 'dm_failed', { userId: ownerId, reason: 'extension_fallback', error: err });
       }
@@ -127,7 +128,10 @@ function createBookingLifecycle({
 
     try {
       const msg = await fetchBookingMessage(removedBooking);
-      if (msg) await msg.delete();
+      if (msg) {
+        await msg.delete();
+        log('info', 'message_deleted', { messageId, reason: auditAction });
+      }
     } catch (err) {
       log('warn', 'booking_message_delete_failed', { messageId, reason: 'auto_delete', error: err });
     }
@@ -136,6 +140,7 @@ function createBookingLifecycle({
       try {
         const user = await client.users.fetch(entry.ownerId);
         await user.send({ content: dmText });
+        log('info', 'dm_sent', { userId: entry.ownerId, reason: auditAction, messageId });
       } catch (err) {
         log('warn', 'dm_failed', { userId: ownerId, reason: 'auto_delete', error: err });
       }
@@ -234,6 +239,7 @@ function createBookingLifecycle({
         ]
       });
 
+      log('info', 'dm_sent', { userId: ownerId, reason: 'booking_reminder', messageId });
       entry.booking.reminderSentAt = new Date().toISOString();
       entry.booking.reminderMinutes = BOOKING_REMINDER_MINUTES;
       messages.set(entry.ownerId, entry.bookings);
@@ -328,6 +334,7 @@ function createBookingLifecycle({
       try {
         const owner = await client.users.fetch(entry.ownerId);
         await owner.send({ content: dmText });
+        log('info', 'dm_sent', { userId: entry.ownerId, reason: 'booking_approved', messageId: entry.booking.messageId });
       } catch (err) {
         log('warn', 'dm_failed', { userId: entry.ownerId, reason: 'booking_approved', error: err });
       }
@@ -420,7 +427,10 @@ function createBookingLifecycle({
 
         try {
           const msg = await fetchBookingMessage(booking);
-          if (msg) await msg.delete();
+          if (msg) {
+            await msg.delete();
+            log('info', 'message_deleted', { messageId: booking.messageId, reason: 'booking_expired' });
+          }
         } catch (err) {
           log('warn', 'booking_message_delete_failed', { messageId: booking.messageId, reason: 'expired', error: err });
         }

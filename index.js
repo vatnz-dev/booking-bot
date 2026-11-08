@@ -31,6 +31,7 @@
   const { getVatsimId } = require('./src/services/vatsim');
   const { createInteractionHandlers } = require('./src/handlers/interactions');
   const { registerReadyHandlers, registerGuildLock } = require('./src/handlers/ready');
+  const { registerProcessHandlers } = require('./src/handlers/process');
   const { startStatsimHealthScheduler } = require('./src/services/traffic');
   const { startEventPositionScheduler } = require('./src/services/eventPositions');
 
@@ -71,17 +72,7 @@
     auditFilePath: path.join(path.dirname(dbPaths.messages), 'audit.jsonl')
   });
 
-  process.on('unhandledRejection', error => {
-    log('error', 'unhandled_rejection', { error });
-    sendAuditLog({ action: 'Unhandled Error', actorLabel: 'System', reason: error?.message || String(error), color: '#D9534F' }).catch(() => {});
-  });
-  // Node can't safely continue after a synchronous crash; log it and let Docker restart the container.
-  process.on('uncaughtException', error => {
-    log('error', 'uncaught_exception', { error });
-    process.exit(1);
-  });
-  client.on('error', error => log('error', 'discord_client_error', { error }));
-  client.on('shardError', (error, shardId) => log('error', 'discord_shard_error', { shardId, error }));
+  registerProcessHandlers({ client, sendAuditLog });
   for (const signal of ['SIGTERM', 'SIGINT']) {
     process.once(signal, () => {
       // Database writes are synchronous, so nothing is mid-write when a signal is handled.
