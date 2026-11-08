@@ -80,7 +80,7 @@ jobs:
 
       - name: Build and push image
         if: steps.image-tag.outputs.tag != ''
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
