@@ -14,7 +14,7 @@
     "cheerio": "^1.2.0",
     "discord-sync-commands": "^0.5.2",
     "discord.js": "^14.25.1",
-    "dotenv": "^16.0.0",
+    "dotenv": "^18.0.9",
     "easy-json-database": "^1.0.0",
     "install": "^0.13.0",
     "luxon": "^3.7.2"
