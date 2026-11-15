@@ -1,5 +1,5 @@
 # Pinned to an exact Node and Alpine release so every build is the same; bump it deliberately.
-FROM node:22.23.4-alpine3.24
+FROM node:22.23.5-alpine3.24
 
 WORKDIR /app
 ENV NODE_ENV=production
