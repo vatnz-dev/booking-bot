@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 let calendar = '';
 require.cache[require.resolve('../src/utils/http')] = { loaded: true, exports: { get: async () => ({ data: calendar }) } };
 const { DateTime } = require('luxon');
+const { createDiscordHelpers } = require('../src/services/discordHelpers');
+const { pruneEventRecords } = require('../src/services/housekeeping');
 const { createAccess } = require('../src/services/access');
 const { createEventThreadService, parseVatnzIcsEvents, buildEventEmbed } = require('../src/services/eventThreads');
 
@@ -113,4 +115,66 @@ test('long event titles are trimmed to fit Discord limits', () => {
   assert.ok(svc.buildEventCoverageEmbed(eventData).toJSON().title.length <= 256);
   const fields = buildEventEmbed(eventData).toJSON().fields;
   assert.ok(fields.every(f => f.value.length <= 1024));
+});
+
+test('expired thread cleanup recovers a false deletion and retries Discord failures', async () => {
+  const eventThreads = memoryStore();
+  const event = { uid: 'old', title: 'Fly-in', startUtcISO: '2020-01-01T01:00:00Z', endUtcISO: '2020-01-01T02:00:00Z' };
+  eventThreads.set('old', { event, threadId: 'thread', status: 'deleted', deletedAt: event.endUtcISO,
+    deleteNote: 'Thread was not found; treating it as already deleted.' });
+  pruneEventRecords(eventThreads);
+  const audit = [];
+  let canFetch = false;
+  let canDelete = false;
+  let deletions = 0;
+  const channels = { cache: new Map(), fetch: async id => {
+    assert.equal(id, 'thread');
+    if (!canFetch) throw new Error('Missing Access');
+    return { isThread: () => true, delete: async () => {
+      if (!canDelete) throw new Error('Missing Permissions');
+      deletions++;
+    } };
+  } };
+  const svc = createEventThreadService({
+    eventThreads, ...createDiscordHelpers({ client: { channels } }), sendAuditLog: entry => audit.push(entry)
+  });
+  for (const error of ['Missing Access', 'Missing Permissions']) {
+    await svc.cleanupFinishedEventThreads();
+    const state = eventThreads.get('old');
+    assert.equal(state.status, 'delete_failed');
+    assert.equal(state.deletedAt, undefined);
+    assert.equal(state.deleteError, error);
+    assert.equal(audit.at(-1).action, 'Event Thread Delete Failed');
+    assert.ok(audit.at(-1).reason.includes(error));
+    canFetch = true;
+  }
+  canDelete = true;
+  await svc.cleanupFinishedEventThreads();
+  await svc.cleanupFinishedEventThreads();
+  assert.equal(deletions, 1);
+  assert.equal(audit.length, 3);
+  assert.equal(audit.at(-1).action, 'Event Thread Deleted');
+  assert.equal(eventThreads.get('old').status, 'deleted');
+  assert.ok(eventThreads.get('old').deletedAt);
+  assert.equal(eventThreads.get('old').deleteError, undefined);
+  assert.equal(eventThreads.get('old').deleteNote, undefined);
+});
+
+test('Unknown Channel during deletion records that the thread was already gone', async () => {
+  const eventThreads = memoryStore();
+  const event = { uid: 'gone', title: 'Fly-in', startUtcISO: '2020-01-01T01:00:00Z', endUtcISO: '2020-01-01T02:00:00Z' };
+  eventThreads.set('gone', { event, threadId: 'thread', status: 'created' });
+  const audit = [];
+  const svc = createEventThreadService({
+    eventThreads,
+    fetchDiscordChannel: async () => ({
+      isThread: () => true,
+      delete: async () => { throw Object.assign(new Error('Unknown Channel'), { code: 10003 }); }
+    }),
+    sendAuditLog: entry => audit.push(entry.action)
+  });
+  await svc.cleanupFinishedEventThreads();
+  await svc.cleanupFinishedEventThreads();
+  assert.equal(eventThreads.get('gone').status, 'deleted');
+  assert.deepEqual(audit, ['Event Thread Already Gone']);
 });

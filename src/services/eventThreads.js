@@ -5,7 +5,8 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
-  EmbedBuilder
+  EmbedBuilder,
+  RESTJSONErrorCodes
 } = require('discord.js');
 
 const {
@@ -21,6 +22,7 @@ const {
 const { cleanEmbedValue } = require('../utils/format');
 const { REFUSALS } = require('./access');
 const { log } = require('../utils/log');
+const { needsThreadCleanup } = require('./threadCleanup');
 const { runBookingMutation } = require('./bookingQueue');
 const {
   DateTime,
@@ -797,7 +799,7 @@ function createEventThreadService({
     for (const entry of eventThreads.all()) {
       const uid = entry.key;
       const state = entry.data;
-      if (!['created', 'delete_failed'].includes(state?.status) || !state.threadId || !state.event) continue;
+      if (!needsThreadCleanup(state)) continue;
 
       const eventTimes = getEventDateTimes(state.event);
       if (!eventTimes) continue;
@@ -805,43 +807,46 @@ function createEventThreadService({
       const deleteAfter = eventTimes.endNz.plus({ hours: 1 });
       if (nowNz < deleteAfter) continue;
 
-      const updatedState = {
-        ...state,
-        status: 'deleted',
-        deletedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      let deleted = false;
-      const thread = await fetchDiscordChannel(state.threadId, 'finished event thread');
-      if (thread?.delete) {
-        try {
-          await thread.delete(`VATNZ event finished more than 1 hour ago: ${String(state.event.title).slice(0, 400)}`);
-          deleted = true;
-          log('info', 'message_deleted', { threadId: state.threadId, reason: 'event_thread_finished' });
-        } catch (err) {
+      const updatedState = { ...state, updatedAt: new Date().toISOString(), status: 'deleted' };
+      delete updatedState.deleteNote;
+      delete updatedState.deleteError;
+      delete updatedState.deletedAt;
+      let action = 'Event Thread Deleted';
+      let reason = 'Event ended more than 1 hour ago';
+      try {
+        const thread = await fetchDiscordChannel(state.threadId, 'finished event thread', { throwOnError: true });
+        if (!thread?.isThread() || (state.parentChannelId && thread.parentId !== state.parentChannelId)) {
+          throw new Error('Could not resolve the recorded event thread in its booking channel.');
+        }
+        await thread.delete(`VATNZ event finished more than 1 hour ago: ${String(state.event.title).slice(0, 400)}`);
+        log('info', 'message_deleted', { threadId: state.threadId, reason: 'event_thread_finished' });
+      } catch (err) {
+        if (err?.code === RESTJSONErrorCodes.UnknownChannel) {
+          action = 'Event Thread Already Gone';
+          reason = 'Discord returned Unknown Channel for the recorded thread ID';
+        } else {
           log('warn', 'event_thread_delete_failed', { threadId: state.threadId, error: err });
           updatedState.status = 'delete_failed';
           updatedState.deleteError = err?.message || String(err);
+          action = 'Event Thread Delete Failed';
+          reason = `Cleanup will retry. ${updatedState.deleteError}`.slice(0, 1024);
         }
-      } else {
-        updatedState.deleteNote = 'Thread was not found; treating it as already deleted.';
-        deleted = true;
       }
 
+      if (updatedState.status === 'deleted') updatedState.deletedAt = updatedState.updatedAt;
       eventThreads.set(uid, updatedState);
 
       await sendAuditLog({
-        action: deleted ? 'Event Thread Deleted' : 'Event Thread Delete Failed',
+        action,
         actorLabel: 'System',
-        reason: deleted ? 'Event ended more than 1 hour ago' : 'Discord thread deletion failed',
+        reason,
         fields: [
           { name: 'Event', value: state.event.title, inline: false },
           { name: 'Time', value: formatEventWindow(state.event), inline: false },
           { name: 'Thread ID', value: state.threadId, inline: true },
           { name: 'Delete After', value: toDiscordTimestamp(deleteAfter, 'F'), inline: true }
         ],
-        color: deleted ? '#D9534F' : '#FF9900'
+        color: updatedState.status === 'deleted' ? '#D9534F' : '#FF9900'
       });
     }
   }

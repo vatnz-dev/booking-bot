@@ -1,3 +1,4 @@
+const { needsThreadCleanup } = require('./threadCleanup');
 const { log, logFailures } = require('../utils/log');
 
 // Records are kept this long after their event ends or endorsement expires; audit.jsonl keeps the history.
@@ -7,7 +8,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 function pruneEventRecords(eventThreads, now = Date.now()) {
   for (const { key, data } of eventThreads.all()) {
     const endedAt = Date.parse(data?.event?.endUtcISO || '');
-    if (!endedAt || now - endedAt <= RETENTION_DAYS * DAY_MS) continue;
+    if (needsThreadCleanup(data) || !endedAt || now - endedAt <= RETENTION_DAYS * DAY_MS) continue;
     eventThreads.delete(key);
     log('info', 'event_record_pruned', { uid: data.event.uid, title: data.event.title, status: data.status, endedAt: data.event.endUtcISO });
   }

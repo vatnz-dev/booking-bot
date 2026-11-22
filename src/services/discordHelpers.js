@@ -2,12 +2,13 @@ const { LOG_CHANNEL_ID } = require('../constants');
 const { log } = require('../utils/log');
 
 function createDiscordHelpers({ client }) {
-  async function fetchDiscordChannel(channelId, label = 'channel') {
+  async function fetchDiscordChannel(channelId, label = 'channel', { throwOnError = false } = {}) {
     if (!channelId) return null;
     try {
       return client.channels.cache.get(channelId) || await client.channels.fetch(channelId);
     } catch (err) {
       log('warn', 'channel_fetch_failed', { label, channelId, error: err });
+      if (throwOnError) throw err;
       return null;
     }
   }
