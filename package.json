@@ -20,7 +20,7 @@
     "luxon": "^3.7.2"
   },
   "devDependencies": {
-    "semantic-release": "^25.0.9"
+    "semantic-release": "^26.0.1"
   },
   "release": {
     "branches": [
