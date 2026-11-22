@@ -1,3 +1,4 @@
+const { ChannelType, Routes } = require('discord.js');
 const { LOG_CHANNEL_ID } = require('../constants');
 const { log } = require('../utils/log');
 
@@ -11,6 +12,15 @@ function createDiscordHelpers({ client }) {
       if (throwOnError) throw err;
       return null;
     }
+  }
+
+  async function deleteEventThread(threadId, parentChannelId, reason) {
+    const route = Routes.channel(threadId);
+    const channel = await client.rest.get(route);
+    if (channel.type !== ChannelType.PublicThread || (parentChannelId && channel.parent_id !== parentChannelId)) {
+      throw new Error('The recorded channel is not the expected public event thread.');
+    }
+    await client.rest.delete(route, { reason });
   }
 
   async function getBookingChannel() {
@@ -58,6 +68,7 @@ function createDiscordHelpers({ client }) {
 
   return {
     fetchDiscordChannel,
+    deleteEventThread,
     getBookingChannel,
     getLogChannel,
     fetchBookingMessage,

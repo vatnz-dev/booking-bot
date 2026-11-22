@@ -127,16 +127,20 @@ test('expired thread cleanup recovers a false deletion and retries Discord failu
   let canFetch = false;
   let canDelete = false;
   let deletions = 0;
-  const channels = { cache: new Map(), fetch: async id => {
-    assert.equal(id, 'thread');
-    if (!canFetch) throw new Error('Missing Access');
-    return { isThread: () => true, delete: async () => {
+  const rest = {
+    get: async route => {
+      assert.equal(route, '/channels/thread');
+      if (!canFetch) throw new Error('Missing Access');
+      return { type: 11, parent_id: 'booking', thread_metadata: { archived: true } };
+    },
+    delete: async route => {
+      assert.equal(route, '/channels/thread');
       if (!canDelete) throw new Error('Missing Permissions');
       deletions++;
-    } };
-  } };
+    }
+  };
   const svc = createEventThreadService({
-    eventThreads, ...createDiscordHelpers({ client: { channels } }), sendAuditLog: entry => audit.push(entry)
+    eventThreads, ...createDiscordHelpers({ client: { rest } }), sendAuditLog: entry => audit.push(entry)
   });
   for (const error of ['Missing Access', 'Missing Permissions']) {
     await svc.cleanupFinishedEventThreads();
@@ -167,14 +171,32 @@ test('Unknown Channel during deletion records that the thread was already gone',
   const audit = [];
   const svc = createEventThreadService({
     eventThreads,
-    fetchDiscordChannel: async () => ({
-      isThread: () => true,
-      delete: async () => { throw Object.assign(new Error('Unknown Channel'), { code: 10003 }); }
-    }),
+    deleteEventThread: async () => { throw Object.assign(new Error('Unknown Channel'), { code: 10003 }); },
     sendAuditLog: entry => audit.push(entry.action)
   });
   await svc.cleanupFinishedEventThreads();
   await svc.cleanupFinishedEventThreads();
   assert.equal(eventThreads.get('gone').status, 'deleted');
   assert.deepEqual(audit, ['Event Thread Already Gone']);
+});
+
+test('a thread remains scheduled for deletion when its first post fails', async () => {
+  const eventThreads = memoryStore();
+  const event = { uid: 'failed-post', title: 'Fly-in', startUtcISO: '2020-01-01T01:00:00Z', endUtcISO: '2020-01-01T02:00:00Z' };
+  let creates = 0;
+  const deleted = [];
+  const svc = createEventThreadService({
+    eventThreads, sendAuditLog: async () => {},
+    getBookingChannel: async () => ({ id: 'booking', threads: { create: async () => {
+      creates++;
+      return { id: 'thread', send: async () => { throw new Error('Post failed'); } };
+    } } }),
+    deleteEventThread: async (id, parent) => deleted.push([id, parent])
+  });
+  const first = svc.createEventThreadForEvent(event);
+  const second = svc.createEventThreadForEvent(event);
+  await Promise.all([assert.rejects(first, /Post failed/), assert.rejects(second, /Post failed/)]);
+  assert.equal(creates, 1);
+  await svc.cleanupFinishedEventThreads();
+  assert.deepEqual(deleted, [['thread', 'booking']]);
 });

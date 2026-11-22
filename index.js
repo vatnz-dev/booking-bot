@@ -103,6 +103,7 @@
   eventThreadService = createEventThreadService({
     eventThreads,
     messages,
+    deleteEventThread: discordHelpers.deleteEventThread,
     fetchDiscordChannel: discordHelpers.fetchDiscordChannel,
     getBookingChannel: discordHelpers.getBookingChannel,
     getLogChannel: discordHelpers.getLogChannel,

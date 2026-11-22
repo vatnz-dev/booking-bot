@@ -268,6 +268,7 @@ async function fetchVatnzEvents() {
 function createEventThreadService({
   eventThreads,
   messages,
+  deleteEventThread,
   fetchDiscordChannel,
   getBookingChannel,
   getLogChannel,
@@ -481,7 +482,7 @@ function createEventThreadService({
     });
 
     setEventThreadState(eventData.uid, {
-      ...state,
+      ...getEventThreadState(eventData.uid),
       event: compactEventState(eventData),
       notificationMessageId: sent.id,
       notificationChannelId: channel.id,
@@ -513,7 +514,7 @@ function createEventThreadService({
         : await getBookingChannel();
       if (!channel?.messages) {
         setEventThreadState(state.event.uid, {
-          ...state,
+          ...getEventThreadState(state.event.uid),
           notificationUpdateError: 'Notification channel was not found.',
           updatedAt: new Date().toISOString()
         });
@@ -528,7 +529,7 @@ function createEventThreadService({
       });
 
       const updatedState = {
-        ...state,
+        ...getEventThreadState(state.event.uid),
         event: compactEventState(eventData || state.event),
         notificationUpdatedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -538,7 +539,7 @@ function createEventThreadService({
       return true;
     } catch (err) {
       const updatedState = {
-        ...state,
+        ...getEventThreadState(state.event.uid),
         notificationUpdateError: err?.message || String(err),
         updatedAt: new Date().toISOString()
       };
@@ -716,13 +717,27 @@ function createEventThreadService({
     return moved;
   }
 
-  async function createEventThreadForEvent(eventData, { actorId = null, source = 'auto' } = {}) {
+  const creatingThreads = new Map();
+
+  function createEventThreadForEvent(eventData, options) {
+    const uid = eventData.uid;
+    if (!creatingThreads.has(uid)) {
+      const pending = createEventThread(eventData, options).finally(() => creatingThreads.delete(uid));
+      creatingThreads.set(uid, pending);
+    }
+    return creatingThreads.get(uid);
+  }
+
+  async function createEventThread(eventData, { actorId = null, source = 'auto' } = {}) {
     const existing = getEventThreadState(eventData.uid);
     if (existing?.status === 'created' && existing.threadId) {
-      const existingThread = await fetchDiscordChannel(existing.threadId, 'event thread');
-      if (existingThread) {
-        await ensureEventThreadName(existingThread, eventData);
-        return { thread: existingThread, moved: [], alreadyCreated: true };
+      try {
+        const thread = await fetchDiscordChannel(existing.threadId, 'event thread', { throwOnError: true });
+        if (!thread) throw new Error('Could not resolve the existing event thread.');
+        await ensureEventThreadName(thread, eventData);
+        return { thread, moved: [], alreadyCreated: true };
+      } catch (err) {
+        if (err?.code !== RESTJSONErrorCodes.UnknownChannel) throw err;
       }
     }
 
@@ -738,11 +753,8 @@ function createEventThreadService({
       reason: `VATNZ event thread for ${String(eventData.title).slice(0, 400)}`
     });
 
-    await thread.send({ embeds: [buildEventEmbed(eventData, 'Event Booking Thread')] });
-
-    const moved = await moveBookingsIntoEventThread(eventData, thread);
     const updatedState = {
-      ...(existing || {}),
+      ...getEventThreadState(eventData.uid),
       status: 'created',
       threadId: thread.id,
       threadChannelId: thread.id,
@@ -751,9 +763,14 @@ function createEventThreadService({
       source,
       createdBy: actorId,
       createdAt: new Date().toISOString(),
-      movedBookings: moved
+      movedBookings: []
     };
     setEventThreadState(eventData.uid, updatedState);
+
+    await thread.send({ embeds: [buildEventEmbed(eventData, 'Event Booking Thread')] });
+
+    const moved = await moveBookingsIntoEventThread(eventData, thread);
+    setEventThreadState(eventData.uid, { ...getEventThreadState(eventData.uid), movedBookings: moved });
 
     await updateEventPromptMessage(updatedState, `Event thread created: <#${thread.id}>`);
     await sendAuditLog({
@@ -814,11 +831,8 @@ function createEventThreadService({
       let action = 'Event Thread Deleted';
       let reason = 'Event ended more than 1 hour ago';
       try {
-        const thread = await fetchDiscordChannel(state.threadId, 'finished event thread', { throwOnError: true });
-        if (!thread?.isThread() || (state.parentChannelId && thread.parentId !== state.parentChannelId)) {
-          throw new Error('Could not resolve the recorded event thread in its booking channel.');
-        }
-        await thread.delete(`VATNZ event finished more than 1 hour ago: ${String(state.event.title).slice(0, 400)}`);
+        await deleteEventThread(state.threadId, state.parentChannelId,
+          `VATNZ event finished more than 1 hour ago: ${String(state.event.title).slice(0, 400)}`);
         log('info', 'message_deleted', { threadId: state.threadId, reason: 'event_thread_finished' });
       } catch (err) {
         if (err?.code === RESTJSONErrorCodes.UnknownChannel) {
